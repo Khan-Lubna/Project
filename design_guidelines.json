@@ -1,0 +1,125 @@
+{
+  "project_name": "MOSSERO Luxury Perfume",
+  "domain": "E-commerce (Luxury Fragrance)",
+  "theme_archetype": "Archetype 5: Jewel & Luxury (Alternating Light/Dark Themes)",
+  "brand": {
+    "name": "MOSSERO",
+    "tagline": "Leave a trace of elegance wherever you go.",
+    "pronunciation": "Mo-SEH-ro"
+  },
+  "products": [
+    {
+      "name": "OURA",
+      "type": "Eau de Parfum",
+      "size": "50ml",
+      "target": "For Him",
+      "theme": "charcoal/dark",
+      "notes": {
+        "top": ["Bergamot", "Fresh Pepper"],
+        "heart": ["Lavender", "Geranium", "Spicy Accord"],
+        "base": ["Ambroxan", "Cedarwood", "Warm Musk"]
+      }
+    },
+    {
+      "name": "VELOURA",
+      "type": "Eau de Parfum",
+      "size": "50ml",
+      "target": "For Her",
+      "theme": "warm cream",
+      "notes": {
+        "top": ["Jasmine"],
+        "heart": ["Tuberose"],
+        "base": ["Rangoon Creeper"]
+      }
+    }
+  ],
+  "colors": {
+    "background": "#F5F0E8",
+    "primary_text": "#1A1A1A",
+    "accent": "#C4A258",
+    "secondary_background": "#FBF7F2",
+    "dark_sections": "#2B2725",
+    "brand_name": "#000000"
+  },
+  "typography": {
+    "fonts": {
+      "headline": "'Cormorant Garamond', serif",
+      "body": "'Montserrat', sans-serif"
+    },
+    "rules": {
+      "brand_name": "Always pure black #000000, bold serif, uppercase, centered.",
+      "headlines": "High-contrast elegant serif, large, spaced.",
+      "subheadings": "Uppercase serif with wide letter-spacing (tracking: 0.2em - 0.3em).",
+      "body_text": "Clean light sans-serif (font-weight: 300).",
+      "ctas_labels": "Uppercase sans-serif, small text-xs/text-sm, gold-colored or black, wide tracking."
+    }
+  },
+  "layout_spacing": {
+    "spacing_system": "Generous white space (p-8, p-16, p-24, p-32).",
+    "corners": "Strictly sharp corners. NEVER rounded (use rounded-none).",
+    "dividers": "1px solid warm gold (#C4A258).",
+    "visual_flow": "Louis Vuitton-level refinement, editorial Instagram-style grids, full-bleed cinematic imagery."
+  },
+  "motion_animations": {
+    "entrance": "Slow elegant fade-ins (duration 0.8s to 1.2s).",
+    "interactions": "Subtle, non-distracting. No pop-ups or discount banners."
+  },
+  "pages": [
+    "Home (Cinematic hero, notes breakdown, Instagram grid)",
+    "OURA Product Page (Charcoal/dark theme)",
+    "VELOURA Product Page (Warm cream theme)",
+    "Our Story Page (Pronunciation pull-quote 'Mo-SEH-ro')",
+    "Contact Page (Resend email functionality)",
+    "Cart Page (Mock checkout functionality)"
+  ],
+  "components": {
+    "navigation": "Sticky minimal navigation with centered logo.",
+    "footer": "Editorial style, generous padding, social links.",
+    "buttons": "Sharp-cornered buttons, pure black or warm gold, uppercase text.",
+    "testing": "All interactive elements must include data-testid attribute."
+  },
+  "media": {
+    "hero_image": {
+      "url": "https://images.unsplash.com/photo-1774682060959-efe13b7a12b9?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODh8MHwxfHNlYXJjaHwxfHxkYXJrJTIwbW9vZHklMjBwZXJmdW1lJTIwYm90dGxlfGVufDB8fHx8MTc3ODA5NTk0Mnww&ixlib=rb-4.1.0&q=85",
+      "description": "Dark moody perfume bottles"
+    },
+    "oura_editorial": {
+      "url": "https://images.unsplash.com/photo-1736605406021-afd8241d5edd?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA3MDB8MHwxfHNlYXJjaHwxfHxtZW4lMjBjb2xvZ25lJTIwZGFyayUyMHdvb2R8ZW58MHx8fHwxNzc4MDk1OTQyfDA&ixlib=rb-4.1.0&q=85",
+      "description": "Charcoal/dark masculine cologne"
+    },
+    "veloura_editorial": {
+      "url": "https://images.unsplash.com/photo-1759793499819-bf60128a54b4?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzl8MHwxfHNlYXJjaHwyfHx3b21lbiUyMHBlcmZ1bWUlMjBlbGVnYW50fGVufDB8fHx8MTc3ODA5NTk0OHww&ixlib=rb-4.1.0&q=85",
+      "description": "Warm cream feminine elegant perfume"
+    },
+    "our_story_opener": {
+      "url": "https://images.unsplash.com/photo-1709662217788-6a8a1b31562a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTF8MHwxfHNlYXJjaHwyfHxwZXJmdW1lJTIwbWFraW5nJTIwY3JhZnRzbWFuc2hpcHxlbnwwfHx8fDE3NzgwOTU5NDJ8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Perfume making craftsmanship"
+    },
+    "instagram_grid": [
+      {
+        "url": "https://images.unsplash.com/photo-1758225502621-9102d2856dc8?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NTN8MHwxfHNlYXJjaHwzfHxsdXh1cnklMjBwZXJmdW1lJTIwYWVzdGhldGljfGVufDB8fHx8MTc3ODA5NTk0OHww&ixlib=rb-4.1.0&q=85",
+        "description": "Luxury perfume collection"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1617733401065-c7bdf0b33417?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDF8MHwxfHNlYXJjaHwzfHxmYXNoaW9uJTIwZWRpdG9yaWFsJTIwbmV1dHJhbHxlbnwwfHx8fDE3NzgwOTU5NDh8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Fashion editorial neutral"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1676577419866-92359c44c983?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDF8MHwxfHNlYXJjaHwyfHxmYXNoaW9uJTIwZWRpdG9yaWFsJTIwbmV1dHJhbHxlbnwwfHx8fDE3NzgwOTU5NDh8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Editorial woman in white coat"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1612303544167-5871c2331e36?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzd8MHwxfHNlYXJjaHwxfHxtaW5pbWFsaXN0JTIwbHV4dXJ5JTIwYXJjaGl0ZWN0dXJlfGVufDB8fHx8MTc3ODA5NTk0OHww&ixlib=rb-4.1.0&q=85",
+        "description": "Minimalist luxury aesthetic"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1612301988752-5a5b19021f45?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzd8MHwxfHNlYXJjaHwzfHxtaW5pbWFsaXN0JTIwbHV4dXJ5JTIwYXJjaGl0ZWN0dXJlfGVufDB8fHx8MTc3ODA5NTk0OHww&ixlib=rb-4.1.0&q=85",
+        "description": "Soft cream luxury texture"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1760113559708-84e7a148ec68?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzl8MHwxfHNlYXJjaHwxfHx3b21lbiUyMHBlcmZ1bWUlMjBlbGVnYW50fGVufDB8fHx8MTc3ODA5NTk0OHww&ixlib=rb-4.1.0&q=85",
+        "description": "Elegant perfume setting"
+      }
+    ]
+  }
+}
