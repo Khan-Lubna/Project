@@ -8,10 +8,9 @@ import { useCart } from "../context/CartContext";
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 export default function Cart() {
-  const { items, removeItem, updateQty, subtotal, clear } = useCart();
+  const { items, removeItem, updateQty, subtotal } = useCart();
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [orderId, setOrderId] = useState(null);
   const [form, setForm] = useState({
     customer_name: "",
     customer_email: "",
@@ -20,7 +19,7 @@ export default function Cart() {
 
   const update = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
-  const checkout = async (e) => {
+  const startCheckout = async (e) => {
     e.preventDefault();
     if (!form.customer_name || !form.customer_email || !form.shipping_address) {
       toast.error("Please complete all fields.");
@@ -28,48 +27,29 @@ export default function Cart() {
     }
     setSubmitting(true);
     try {
-      const res = await axios.post(`${API}/checkout`, {
+      const res = await axios.post(`${API}/checkout/session`, {
         ...form,
         items: items.map((i) => ({ slug: i.slug, quantity: i.quantity })),
+        origin_url: window.location.origin,
       });
-      setOrderId(res.data.order_id);
-      clear();
-      toast.success("Order received", {
-        description: `Confirmation ${res.data.order_id} — total $${res.data.total.toFixed(
-          2
-        )}`,
-      });
+      // Persist pending session so success page can show order details
+      sessionStorage.setItem(
+        "mossero_pending_session",
+        JSON.stringify({
+          session_id: res.data.session_id,
+          order_id: res.data.order_id,
+          total: res.data.total,
+        })
+      );
+      // Redirect to Stripe-hosted checkout
+      window.location.href = res.data.url;
     } catch (err) {
       toast.error("Checkout failed", {
         description: err?.response?.data?.detail || "Please try again.",
       });
-    } finally {
       setSubmitting(false);
     }
   };
-
-  if (orderId) {
-    return (
-      <div data-testid="order-confirmation" className="bg-cream pt-40 pb-40 px-6 text-center">
-        <p className="text-[11px] uppercase tracking-mega text-gold mb-8">
-          Confirmation
-        </p>
-        <h1 className="font-serif text-5xl lg:text-7xl text-ink leading-tight mb-8">
-          Thank you.
-        </h1>
-        <hr className="gold-divider-short mb-10 mx-auto" />
-        <p className="text-base text-ink/70 font-light max-w-xl mx-auto leading-[1.9] mb-4">
-          Your order has been received. A discreet confirmation will follow shortly.
-        </p>
-        <p className="text-sm tracking-luxe text-ink mb-12" data-testid="order-id">
-          Order #{orderId}
-        </p>
-        <Link to="/fragrances" className="btn-outline-gold">
-          Return to the Collection
-        </Link>
-      </div>
-    );
-  }
 
   return (
     <div data-testid="cart-page" className="bg-cream pt-32 lg:pt-44 pb-32">
@@ -173,6 +153,9 @@ export default function Cart() {
                 >
                   Proceed to Checkout
                 </button>
+                <p className="text-[10px] uppercase tracking-luxe text-ink/50 mt-6 text-center">
+                  Secured by Stripe
+                </p>
               </div>
             </aside>
           </div>
@@ -186,14 +169,14 @@ export default function Cart() {
           >
             <form
               onClick={(e) => e.stopPropagation()}
-              onSubmit={checkout}
+              onSubmit={startCheckout}
               className="bg-cream max-w-xl w-full p-10 lg:p-14 max-h-[90vh] overflow-y-auto"
             >
               <p className="text-[11px] uppercase tracking-mega text-gold mb-6 text-center">
                 Checkout
               </p>
               <h2 className="font-serif text-3xl lg:text-4xl text-ink text-center mb-8">
-                Complete your order
+                Your details
               </h2>
               <hr className="gold-divider-short mx-auto mb-10" />
 
@@ -243,8 +226,11 @@ export default function Cart() {
                 disabled={submitting}
                 className="btn-gold w-full mt-8"
               >
-                {submitting ? "Placing order…" : "Place Order"}
+                {submitting ? "Redirecting to Stripe…" : "Continue to Payment"}
               </button>
+              <p className="text-[10px] uppercase tracking-luxe text-ink/50 mt-6 text-center">
+                You will be redirected to Stripe to complete payment securely.
+              </p>
               <button
                 type="button"
                 onClick={() => setCheckoutOpen(false)}

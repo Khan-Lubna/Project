@@ -10,6 +10,7 @@ import Product from "@/pages/Product";
 import OurStory from "@/pages/OurStory";
 import Contact from "@/pages/Contact";
 import Cart from "@/pages/Cart";
+import CheckoutSuccess from "@/pages/CheckoutSuccess";
 
 export default function App() {
   return (
@@ -23,6 +24,7 @@ export default function App() {
             <Route path="/our-story" element={<OurStory />} />
             <Route path="/contact" element={<Contact />} />
             <Route path="/cart" element={<Cart />} />
+            <Route path="/cart/success" element={<CheckoutSuccess />} />
             <Route path="*" element={<Home />} />
           </Route>
         </Routes>

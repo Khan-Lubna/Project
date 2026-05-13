@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, Request
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -11,6 +11,10 @@ from typing import List, Optional
 import uuid
 from datetime import datetime, timezone
 import resend
+from emergentintegrations.payments.stripe.checkout import (
+    StripeCheckout,
+    CheckoutSessionRequest,
+)
 
 
 ROOT_DIR = Path(__file__).parent
@@ -26,6 +30,8 @@ CONTACT_RECIPIENT_EMAIL = os.environ.get('CONTACT_RECIPIENT_EMAIL', 'mossero.in@
 
 if RESEND_API_KEY:
     resend.api_key = RESEND_API_KEY
+
+STRIPE_API_KEY = os.environ.get('STRIPE_API_KEY', '')
 
 logging.basicConfig(
     level=logging.INFO,
@@ -110,19 +116,20 @@ class CartItem(BaseModel):
     quantity: int = Field(ge=1, le=20)
 
 
-class CheckoutRequest(BaseModel):
+class CheckoutSessionCreate(BaseModel):
     customer_name: str
     customer_email: EmailStr
     shipping_address: str
     items: List[CartItem]
+    origin_url: str
 
 
-class CheckoutResponse(BaseModel):
+class CheckoutSessionCreateResponse(BaseModel):
+    url: str
+    session_id: str
     order_id: str
     total: float
     currency: str
-    status: str
-    message: str
 
 
 class ContactRequest(BaseModel):
@@ -151,8 +158,16 @@ async def get_product(slug: str):
     raise HTTPException(status_code=404, detail="Product not found")
 
 
-@api_router.post("/checkout", response_model=CheckoutResponse)
-async def checkout(req: CheckoutRequest):
+def _build_stripe(origin_url: str) -> StripeCheckout:
+    webhook_url = f"{origin_url.rstrip('/')}/api/webhook/stripe"
+    return StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
+
+
+@api_router.post("/checkout/session", response_model=CheckoutSessionCreateResponse)
+async def create_checkout_session(req: CheckoutSessionCreate):
+    if not STRIPE_API_KEY:
+        raise HTTPException(status_code=500, detail="Stripe is not configured")
+
     by_slug = {p["slug"]: p for p in PRODUCTS}
     total = 0.0
     detailed_items = []
@@ -170,27 +185,163 @@ async def checkout(req: CheckoutRequest):
             "line_total": line_total,
         })
 
+    if total <= 0:
+        raise HTTPException(status_code=400, detail="Cart is empty")
+
+    total = round(total, 2)
     order_id = f"MSR-{uuid.uuid4().hex[:8].upper()}"
-    doc = {
+
+    origin = req.origin_url.rstrip('/')
+    success_url = f"{origin}/cart/success?session_id={{CHECKOUT_SESSION_ID}}"
+    cancel_url = f"{origin}/cart"
+
+    stripe_checkout = _build_stripe(origin)
+    metadata = {
         "order_id": order_id,
+        "customer_email": req.customer_email,
+        "customer_name": req.customer_name,
+        "source": "mossero_web",
+    }
+    checkout_request = CheckoutSessionRequest(
+        amount=float(total),
+        currency="usd",
+        success_url=success_url,
+        cancel_url=cancel_url,
+        metadata=metadata,
+    )
+    session = await stripe_checkout.create_checkout_session(checkout_request)
+
+    txn_doc = {
+        "order_id": order_id,
+        "session_id": session.session_id,
         "customer_name": req.customer_name,
         "customer_email": req.customer_email,
         "shipping_address": req.shipping_address,
         "items": detailed_items,
-        "total": round(total, 2),
-        "currency": "USD",
-        "status": "received",
+        "amount": total,
+        "currency": "usd",
+        "metadata": metadata,
+        "payment_status": "initiated",
+        "status": "open",
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
-    await db.orders.insert_one(doc)
+    await db.payment_transactions.insert_one(txn_doc)
 
-    return CheckoutResponse(
+    return CheckoutSessionCreateResponse(
+        url=session.url,
+        session_id=session.session_id,
         order_id=order_id,
-        total=round(total, 2),
-        currency="USD",
-        status="received",
-        message="Thank you. Your order has been received. A confirmation will follow shortly.",
+        total=total,
+        currency="usd",
     )
+
+
+@api_router.get("/checkout/status/{session_id}")
+async def get_checkout_status(session_id: str, request: Request):
+    if not STRIPE_API_KEY:
+        raise HTTPException(status_code=500, detail="Stripe is not configured")
+
+    txn = await db.payment_transactions.find_one(
+        {"session_id": session_id}, {"_id": 0}
+    )
+    if not txn:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # If already finalized as paid in our DB, return cached
+    if txn.get("payment_status") == "paid":
+        return {
+            "session_id": session_id,
+            "order_id": txn["order_id"],
+            "payment_status": "paid",
+            "status": txn.get("status", "complete"),
+            "amount_total": int(round(txn["amount"] * 100)),
+            "currency": txn["currency"],
+        }
+
+    origin = str(request.base_url).rstrip('/')
+    stripe_checkout = _build_stripe(origin)
+    try:
+        status_resp = await stripe_checkout.get_checkout_status(session_id)
+    except Exception as e:
+        logger.warning(f"Stripe status lookup failed for {session_id}: {e}")
+        # Return cached state — webhook will update once Stripe confirms
+        return {
+            "session_id": session_id,
+            "order_id": txn["order_id"],
+            "payment_status": txn.get("payment_status", "initiated"),
+            "status": txn.get("status", "open"),
+            "amount_total": int(round(txn["amount"] * 100)),
+            "currency": txn["currency"],
+        }
+
+    new_status = status_resp.status
+    new_payment_status = status_resp.payment_status
+
+    update = {
+        "$set": {
+            "payment_status": new_payment_status,
+            "status": new_status,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    }
+    await db.payment_transactions.update_one({"session_id": session_id}, update)
+
+    # On first transition to paid, write a final order record (idempotent)
+    if new_payment_status == "paid":
+        existing = await db.orders.find_one({"order_id": txn["order_id"]}, {"_id": 0})
+        if not existing:
+            order_doc = {
+                "order_id": txn["order_id"],
+                "session_id": session_id,
+                "customer_name": txn["customer_name"],
+                "customer_email": txn["customer_email"],
+                "shipping_address": txn["shipping_address"],
+                "items": txn["items"],
+                "total": txn["amount"],
+                "currency": txn["currency"],
+                "status": "paid",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.orders.insert_one(order_doc)
+
+    return {
+        "session_id": session_id,
+        "order_id": txn["order_id"],
+        "payment_status": new_payment_status,
+        "status": new_status,
+        "amount_total": status_resp.amount_total,
+        "currency": status_resp.currency,
+    }
+
+
+@api_router.post("/webhook/stripe")
+async def stripe_webhook(request: Request):
+    if not STRIPE_API_KEY:
+        raise HTTPException(status_code=500, detail="Stripe is not configured")
+
+    body = await request.body()
+    signature = request.headers.get("Stripe-Signature", "")
+    origin = str(request.base_url).rstrip('/')
+    stripe_checkout = _build_stripe(origin)
+    try:
+        event = await stripe_checkout.handle_webhook(body, signature)
+    except Exception as e:
+        logger.error(f"Stripe webhook error: {e}")
+        raise HTTPException(status_code=400, detail="Invalid webhook")
+
+    session_id = getattr(event, "session_id", None)
+    payment_status = getattr(event, "payment_status", None)
+    if session_id and payment_status:
+        await db.payment_transactions.update_one(
+            {"session_id": session_id},
+            {"$set": {
+                "payment_status": payment_status,
+                "webhook_event": getattr(event, "event_type", None),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+    return {"received": True}
 
 
 @api_router.post("/contact")
