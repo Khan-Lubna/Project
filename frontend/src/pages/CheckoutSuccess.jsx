@@ -123,9 +123,18 @@ export default function CheckoutSuccess() {
             Total ${formatted} {state.currency?.toUpperCase()}
           </p>
         )}
-        <Link to="/fragrances" className="btn-outline-gold">
-          Return to the Collection
-        </Link>
+        <div className="flex flex-col sm:flex-row gap-4 justify-center">
+          <Link
+            to={`/track?order_id=${encodeURIComponent(orderId)}`}
+            className="btn-outline-gold"
+            data-testid="success-track-link"
+          >
+            Track Your Order
+          </Link>
+          <Link to="/fragrances" className="btn-outline-gold">
+            Return to the Collection
+          </Link>
+        </div>
       </div>
     );
   }

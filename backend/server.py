@@ -155,6 +155,11 @@ class ContactRequest(BaseModel):
     message: str
 
 
+class OrderLookupRequest(BaseModel):
+    order_id: str
+    email: EmailStr
+
+
 # ---------------- Routes ----------------
 @api_router.get("/")
 async def root():
@@ -518,6 +523,39 @@ async def razorpay_webhook(request: Request):
                 await _finalize_paid_order(txn_after, rzp_payment_id)
 
     return {"received": True}
+
+
+@api_router.post("/orders/lookup")
+async def lookup_order(req: OrderLookupRequest):
+    order_id = req.order_id.strip().upper()
+    email = req.email.strip().lower()
+
+    order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
+    txn = await db.payment_transactions.find_one({"order_id": order_id}, {"_id": 0})
+
+    source = order or txn
+    if not source:
+        raise HTTPException(status_code=404, detail="No order found with that reference.")
+
+    if source["customer_email"].lower() != email:
+        # Same response as missing — don't leak existence
+        raise HTTPException(status_code=404, detail="No order found with that reference.")
+
+    payment_status = (order["status"] if order else txn.get("payment_status", "initiated"))
+    if payment_status == "complete":
+        payment_status = "paid"
+
+    return {
+        "order_id": order_id,
+        "customer_name": source["customer_name"],
+        "items": source["items"],
+        "total": source.get("total", txn["amount"] if txn else 0),
+        "currency": source["currency"],
+        "payment_status": payment_status,
+        "shipping_status": "preparing" if payment_status == "paid" else "awaiting_payment",
+        "shipping_address": source["shipping_address"],
+        "created_at": source["created_at"],
+    }
 
 
 @api_router.post("/contact")

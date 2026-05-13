@@ -46,6 +46,15 @@ export default function Footer() {
               </li>
               <li>
                 <Link
+                  to="/track"
+                  data-testid="footer-link-track"
+                  className="text-sm text-ink/75 hover:text-gold transition-colors font-light"
+                >
+                  Track Order
+                </Link>
+              </li>
+              <li>
+                <Link
                   to="/contact"
                   data-testid="footer-link-contact"
                   className="text-sm text-ink/75 hover:text-gold transition-colors font-light"

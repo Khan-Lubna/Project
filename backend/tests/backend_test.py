@@ -313,3 +313,91 @@ class TestWebhook:
         assert txn["status"] == "complete"
         assert txn["rzp_payment_id"] == "pay_webhook_test_001"
         assert txn["webhook_event"] == "payment.captured"
+
+
+
+# ---------- Order Lookup (/api/orders/lookup) ----------
+SEED_ORDER_ID = "MSR-B71D46B3"
+SEED_EMAIL = "mossero.in@gmail.com"
+
+
+class TestOrderLookup:
+    def test_lookup_valid_paid_order(self, api):
+        r = api.post(f"{BASE_URL}/api/orders/lookup", json={
+            "order_id": SEED_ORDER_ID,
+            "email": SEED_EMAIL,
+        })
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert d["order_id"] == SEED_ORDER_ID
+        assert "customer_name" in d
+        assert isinstance(d["items"], list) and len(d["items"]) >= 1
+        assert "total" in d
+        assert d["currency"]
+        assert d["payment_status"] == "paid"
+        assert d["shipping_status"] == "preparing"
+        assert "shipping_address" in d
+        assert "created_at" in d
+
+    def test_lookup_wrong_email_returns_404_no_leak(self, api):
+        r = api.post(f"{BASE_URL}/api/orders/lookup", json={
+            "order_id": SEED_ORDER_ID,
+            "email": "wrong_email@example.com",
+        })
+        assert r.status_code == 404
+        assert r.json().get("detail") == "No order found with that reference."
+
+    def test_lookup_unknown_order_returns_404_same_message(self, api):
+        r = api.post(f"{BASE_URL}/api/orders/lookup", json={
+            "order_id": "MSR-DOESNOTX",
+            "email": SEED_EMAIL,
+        })
+        assert r.status_code == 404
+        assert r.json().get("detail") == "No order found with that reference."
+
+    def test_lookup_malformed_email_returns_422(self, api):
+        r = api.post(f"{BASE_URL}/api/orders/lookup", json={
+            "order_id": SEED_ORDER_ID,
+            "email": "not-an-email",
+        })
+        assert r.status_code == 422
+
+    def test_lookup_case_insensitive_email(self, api):
+        r = api.post(f"{BASE_URL}/api/orders/lookup", json={
+            "order_id": SEED_ORDER_ID,
+            "email": "MOSSERO.IN@GMAIL.COM",
+        })
+        assert r.status_code == 200, r.text
+        assert r.json()["order_id"] == SEED_ORDER_ID
+
+    def test_lookup_case_insensitive_order_id(self, api):
+        lower_id = SEED_ORDER_ID.lower()  # 'msr-b71d46b3'
+        r = api.post(f"{BASE_URL}/api/orders/lookup", json={
+            "order_id": lower_id,
+            "email": SEED_EMAIL,
+        })
+        assert r.status_code == 200, r.text
+        assert r.json()["order_id"] == SEED_ORDER_ID  # normalized upper
+
+    def test_lookup_unpaid_order_returns_awaiting_payment(self, api):
+        # Create a brand-new initiated order via /checkout/order to test fallback to payment_transactions
+        cr = api.post(f"{BASE_URL}/api/checkout/order", json={
+            "customer_name": "TEST_LookupUnpaid",
+            "customer_email": "TEST_lookup_unpaid@example.com",
+            "shipping_address": "1 Unpaid Ln",
+            "items": [{"slug": "oura", "quantity": 1}],
+        })
+        assert cr.status_code == 200, cr.text
+        new_order_id = cr.json()["order_id"]
+
+        r = api.post(f"{BASE_URL}/api/orders/lookup", json={
+            "order_id": new_order_id,
+            "email": "TEST_lookup_unpaid@example.com",
+        })
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert d["order_id"] == new_order_id
+        assert d["payment_status"] in ("initiated",)
+        assert d["shipping_status"] == "awaiting_payment"
+        assert d["total"] == 100.00
+        assert d["currency"] == "USD"
