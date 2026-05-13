@@ -181,6 +181,135 @@ def _verify_signature(payload: str, signature: str, secret: str) -> bool:
     return hmac.compare_digest(expected, signature)
 
 
+def _format_currency(amount: float, currency: str) -> str:
+    symbol = {"USD": "$", "INR": "₹", "EUR": "€", "GBP": "£"}.get(currency.upper(), "")
+    return f"{symbol}{amount:,.2f} {currency.upper()}"
+
+
+def _order_email_html(order_doc: dict, for_maison: bool = False) -> str:
+    rows = "".join(
+        f"""<tr>
+            <td style=\"padding:14px 0;border-bottom:1px solid #E5DCC9;color:#1A1A1A;font-family:Georgia,serif;font-size:16px;\">
+              <strong style=\"letter-spacing:0.18em;\">{it['name']}</strong>
+              <div style=\"font-size:11px;letter-spacing:0.2em;text-transform:uppercase;color:#6b6357;margin-top:4px;\">50ml · Eau de Parfum</div>
+            </td>
+            <td style=\"padding:14px 0;border-bottom:1px solid #E5DCC9;text-align:center;color:#1A1A1A;font-family:Arial,sans-serif;font-size:14px;\">× {it['quantity']}</td>
+            <td style=\"padding:14px 0;border-bottom:1px solid #E5DCC9;text-align:right;color:#1A1A1A;font-family:Georgia,serif;font-size:16px;\">{_format_currency(it['line_total'], order_doc['currency'])}</td>
+        </tr>"""
+        for it in order_doc.get("items", [])
+    )
+    title = "A new order has been placed" if for_maison else "Thank you for your order"
+    body_intro = (
+        f"<p style=\"color:#1A1A1A;font-family:Arial,sans-serif;font-size:14px;line-height:1.9;\">A new order has been received from <strong>{order_doc['customer_name']}</strong> ({order_doc['customer_email']}).</p>"
+        if for_maison
+        else f"<p style=\"color:#1A1A1A;font-family:Arial,sans-serif;font-size:14px;line-height:1.9;\">Dear {order_doc['customer_name']},<br/><br/>Thank you for your order with the Maison Mossero. Your payment has been confirmed and your fragrance will be prepared with care. A despatch notification will follow.</p>"
+    )
+    return f"""
+    <table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#F5F0E8;padding:40px 16px;font-family:Arial,sans-serif;\">
+      <tr><td align=\"center\">
+        <table width=\"560\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#FBF7F2;border:1px solid #C4A258;\">
+          <tr><td style=\"padding:48px 40px 32px 40px;text-align:center;\">
+            <h1 style=\"margin:0;font-family:Georgia,serif;font-weight:bold;color:#000000;letter-spacing:0.35em;font-size:24px;\">MOSSERO</h1>
+            <p style=\"margin:24px 0 0 0;font-size:10px;letter-spacing:0.3em;text-transform:uppercase;color:#C4A258;\">{title}</p>
+            <hr style=\"border:none;border-top:1px solid #C4A258;width:48px;margin:24px auto 0 auto;\"/>
+          </td></tr>
+          <tr><td style=\"padding:0 40px 24px 40px;\">{body_intro}</td></tr>
+          <tr><td style=\"padding:0 40px;\">
+            <table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\">{rows}
+              <tr>
+                <td colspan=\"2\" style=\"padding:18px 0 0 0;text-align:right;font-family:Arial,sans-serif;font-size:11px;letter-spacing:0.25em;text-transform:uppercase;color:#1A1A1A;\">Total</td>
+                <td style=\"padding:18px 0 0 0;text-align:right;font-family:Georgia,serif;font-size:20px;color:#1A1A1A;\">{_format_currency(order_doc['total'], order_doc['currency'])}</td>
+              </tr>
+            </table>
+          </td></tr>
+          <tr><td style=\"padding:32px 40px;\">
+            <p style=\"margin:0 0 6px 0;font-size:10px;letter-spacing:0.25em;text-transform:uppercase;color:#1A1A1A;\">Order reference</p>
+            <p style=\"margin:0 0 16px 0;font-family:Georgia,serif;font-size:18px;color:#1A1A1A;letter-spacing:0.1em;\">{order_doc['order_id']}</p>
+            <p style=\"margin:0 0 6px 0;font-size:10px;letter-spacing:0.25em;text-transform:uppercase;color:#1A1A1A;\">Shipping to</p>
+            <p style=\"margin:0;font-size:14px;color:#1A1A1A;line-height:1.8;white-space:pre-line;\">{order_doc['shipping_address']}</p>
+          </td></tr>
+          <tr><td style=\"padding:32px 40px;background:#F5F0E8;text-align:center;\">
+            <p style=\"margin:0;font-size:10px;letter-spacing:0.25em;text-transform:uppercase;color:#6b6357;\">Leave a trace of elegance wherever you go.</p>
+            <p style=\"margin:16px 0 0 0;font-size:11px;color:#9b9285;\">Maison Mossero &nbsp;·&nbsp; www.mossero.in</p>
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+    """
+
+
+async def _send_order_emails(order_doc: dict) -> tuple[bool, Optional[str]]:
+    """Send confirmation to customer + notification to maison. Returns (sent, error)."""
+    if not RESEND_API_KEY:
+        return False, "RESEND_API_KEY not configured"
+
+    customer_html = _order_email_html(order_doc, for_maison=False)
+    maison_html = _order_email_html(order_doc, for_maison=True)
+
+    try:
+        await asyncio.to_thread(
+            resend.Emails.send,
+            {
+                "from": SENDER_EMAIL,
+                "to": [order_doc["customer_email"]],
+                "subject": f"[MOSSERO] Order confirmation — {order_doc['order_id']}",
+                "html": customer_html,
+            },
+        )
+        await asyncio.to_thread(
+            resend.Emails.send,
+            {
+                "from": SENDER_EMAIL,
+                "to": [CONTACT_RECIPIENT_EMAIL],
+                "reply_to": order_doc["customer_email"],
+                "subject": f"[MOSSERO] New order {order_doc['order_id']} — {order_doc['customer_name']}",
+                "html": maison_html,
+            },
+        )
+        return True, None
+    except Exception as e:
+        logger.error(f"Order confirmation email failed: {e}")
+        return False, str(e)
+
+
+async def _finalize_paid_order(txn: dict, rzp_payment_id: Optional[str]) -> dict:
+    """Idempotently create the orders record and send confirmation emails."""
+    order_id = txn["order_id"]
+    existing = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
+    if existing:
+        return existing
+
+    order_doc = {
+        "order_id": order_id,
+        "rzp_order_id": txn["rzp_order_id"],
+        "rzp_payment_id": rzp_payment_id or txn.get("rzp_payment_id"),
+        "customer_name": txn["customer_name"],
+        "customer_email": txn["customer_email"],
+        "customer_contact": txn.get("customer_contact"),
+        "shipping_address": txn["shipping_address"],
+        "items": txn["items"],
+        "total": txn["amount"],
+        "currency": txn["currency"],
+        "status": "paid",
+        "confirmation_email_sent": False,
+        "confirmation_email_error": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.orders.insert_one(order_doc)
+
+    sent, error = await _send_order_emails(order_doc)
+    await db.orders.update_one(
+        {"order_id": order_id},
+        {"$set": {
+            "confirmation_email_sent": sent,
+            "confirmation_email_error": error,
+        }},
+    )
+    order_doc["confirmation_email_sent"] = sent
+    order_doc["confirmation_email_error"] = error
+    return order_doc
+
+
 @api_router.post("/checkout/order", response_model=OrderCreateResponse)
 async def create_order(req: OrderCreateRequest):
     if rzp_client is None:
@@ -312,21 +441,11 @@ async def verify_payment(req: VerifyPaymentRequest):
 
     existing_order = await db.orders.find_one({"order_id": req.order_id}, {"_id": 0})
     if not existing_order:
-        order_doc = {
-            "order_id": req.order_id,
-            "rzp_order_id": req.razorpay_order_id,
-            "rzp_payment_id": req.razorpay_payment_id,
-            "customer_name": txn["customer_name"],
-            "customer_email": txn["customer_email"],
-            "customer_contact": txn.get("customer_contact"),
-            "shipping_address": txn["shipping_address"],
-            "items": txn["items"],
-            "total": txn["amount"],
-            "currency": txn["currency"],
-            "status": "paid",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-        await db.orders.insert_one(order_doc)
+        # Reload latest txn fields with rzp_payment_id we just set
+        latest_txn = await db.payment_transactions.find_one(
+            {"order_id": req.order_id}, {"_id": 0}
+        ) or txn
+        await _finalize_paid_order(latest_txn, req.razorpay_payment_id)
 
     return {
         "order_id": req.order_id,
@@ -390,6 +509,13 @@ async def razorpay_webhook(request: Request):
             {"rzp_order_id": rzp_order_id},
             {"$set": update_fields},
         )
+        # Finalize + send emails if this webhook is the first paid signal
+        if update_fields.get("payment_status") == "paid":
+            txn_after = await db.payment_transactions.find_one(
+                {"rzp_order_id": rzp_order_id}, {"_id": 0}
+            )
+            if txn_after:
+                await _finalize_paid_order(txn_after, rzp_payment_id)
 
     return {"received": True}
 
