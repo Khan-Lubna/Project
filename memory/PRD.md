@@ -1,36 +1,45 @@
 # MOSSERO — Product Requirements Document
 
 ## Original Problem Statement
-Build a Shopify-style e-commerce website for **MOSSERO**, a luxury perfume brand, with a Louis Vuitton-level visual identity and design DNA. Two products: OURA (For Him) and VELOURA (For Her). Brand uses cream/black/gold palette with serif headlines and elegant typography.
+Build a Shopify-style e-commerce website for **MOSSERO**, a luxury perfume brand, with a Louis Vuitton-level visual identity. Two products: OURA (For Him) and VELOURA (For Her). Brand uses cream/black/gold palette with serif headlines and elegant typography.
 
-User chose: React/FastAPI replica, functional cart with mock checkout, Unsplash imagery, Resend email for contact form, recipient `mossero.in@gmail.com`, domain `www.mossero.in`.
+User choices: React/FastAPI replica, functional cart with **Razorpay LIVE** checkout, Unsplash imagery (interim), Resend email for contact form, recipient `mossero.in@gmail.com`, sender `hello@mossero.in`, domain `www.mossero.in`. Prices: **$100 USD** for OURA and VELOURA.
 
 ## Architecture
-- **Backend**: FastAPI + MongoDB (Motor). Endpoints: `/api/products`, `/api/products/{slug}`, `/api/checkout`, `/api/contact`.
-- **Frontend**: React 19 + react-router-dom v7 + TailwindCSS + Cormorant Garamond/Montserrat fonts. Sonner for toasts. LocalStorage cart via React Context.
+- **Backend** (FastAPI + MongoDB + Motor):
+  - `GET /api/products`, `GET /api/products/{slug}` — catalog
+  - `POST /api/checkout/order` — creates Razorpay order, stores `payment_transactions`
+  - `POST /api/checkout/verify` — HMAC-SHA256 signature verification, idempotent paid-state transition, writes `orders`
+  - `GET /api/checkout/status/{order_id}` — lookup by internal order id (MSR-…)
+  - `POST /api/webhook/razorpay` — async confirmation handler
+  - `POST /api/contact` — Resend email send + persist
+- **Frontend** (React 19 + react-router v7 + Tailwind + Cormorant Garamond / Montserrat):
+  - 6 pages: Home / Fragrances / Product / Our Story / Contact / Cart + `/cart/success`
+  - LocalStorage cart, Sonner toasts, lazy-loaded Razorpay Checkout JS
 - **Theme**: cream `#F5F0E8`, gold `#C4A258`, charcoal `#2B2725`, sharp corners only.
 
-## Personas
-- **Discerning consumer**: browses bottles, reads notes, completes a refined checkout.
-- **Press / concierge**: uses contact form to inquire about the maison.
-
 ## Implemented (2026-02-06)
-- 6 pages: Home, Fragrances, Product (OURA dark + VELOURA cream), Our Story (pull-quote), Contact, Cart with **real Stripe Checkout** + `/cart/success` confirmation page.
-- Sticky centered-logo nav with live cart badge; gold/black sharp-corner buttons; fade-in scroll animations.
-- Backend: product catalog, **Stripe Checkout via emergentintegrations** (POST `/api/checkout/session`, GET `/api/checkout/status/{id}`, POST `/api/webhook/stripe`), MongoDB `payment_transactions` + `orders` collections with idempotent finalization.
-- **Resend email LIVE** — `hello@mossero.in` verified sender → `mossero.in@gmail.com` recipient.
-- **Stripe LIVE (test mode)** — sk_test_emergent. Real Stripe-hosted checkout URLs. Status endpoint gracefully falls back to cached DB state when emergentintegrations lookup raises (known platform quirk); webhook is source of truth.
-- Tests: backend 10/10, frontend e2e + error states all pass.
+- 6 pages + cart success/error states
+- Sticky centered-logo nav with live cart badge; sharp-corner gold/black CTAs; fade-in animations
+- **Resend LIVE**: `hello@mossero.in` → `mossero.in@gmail.com` (delivery confirmed)
+- **Razorpay LIVE** (`rzp_live_SoukX8sERjIS3Z`): real orders, real signature verification, idempotent finalization, webhook handler
+- Tests: backend 15/15 (iter 3), full frontend e2e + error states passing
 
 ## P1 / P2 Backlog
-- **P1**: Production Stripe key + production domain in Stripe dashboard for live payments.
-- **P1**: Replace placeholder Unsplash imagery with original MOSSERO product photography.
-- **P2**: Newsletter / waitlist capture on Fragrances page.
-- **P2**: Order confirmation email via Resend on successful payment.
-- **P2**: Admin/CMS for editing copy & product imagery.
-- **P2**: Multilingual (EN/FR) toggle.
+- **P1**: Set `RAZORPAY_WEBHOOK_SECRET` and register webhook in Razorpay dashboard → `https://moss-refined.preview.emergentagent.com/api/webhook/razorpay`
+- **P1**: Replace placeholder Unsplash imagery with original MOSSERO product photography
+- **P1**: Rotate Razorpay keys (they were transmitted via chat)
+- **P2**: Order confirmation email via Resend on `payment_status=paid`
+- **P2**: Newsletter / waitlist capture on Fragrances page
+- **P2**: Admin/CMS for editing copy & product imagery
+- **P2**: Multilingual (EN/FR) toggle
+- **P2**: Currency selector (INR/USD) — Razorpay supports both if enabled on merchant account
+
+## Personas
+- **Discerning consumer**: browses bottles, reads notes, completes Razorpay-secured checkout.
+- **Press / concierge**: uses contact form (Resend) to inquire.
 
 ## Next Tasks
-1. Swap in original product photography.
-2. Wire post-payment order confirmation email (Resend) on webhook payment_status=paid.
-3. Move to live Stripe key when ready to launch.
+1. Configure Razorpay webhook + webhook secret for async confirmation reliability.
+2. Wire order confirmation email via Resend on successful payment.
+3. Replace placeholder photography with original brand assets.
