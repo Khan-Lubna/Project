@@ -14,6 +14,7 @@ import uuid
 from datetime import datetime, timezone
 import resend
 import razorpay
+import shiprocket_client
 
 
 ROOT_DIR = Path(__file__).parent
@@ -121,11 +122,21 @@ class CartItem(BaseModel):
     quantity: int = Field(ge=1, le=20)
 
 
+class StructuredAddress(BaseModel):
+    line1: str
+    line2: Optional[str] = ""
+    city: str
+    state: str
+    postal_code: str
+    country: str = "India"
+
+
 class OrderCreateRequest(BaseModel):
     customer_name: str
     customer_email: EmailStr
     customer_contact: Optional[str] = None
     shipping_address: str
+    address_struct: Optional[StructuredAddress] = None
     items: List[CartItem]
 
 
@@ -292,12 +303,20 @@ async def _finalize_paid_order(txn: dict, rzp_payment_id: Optional[str]) -> dict
         "customer_email": txn["customer_email"],
         "customer_contact": txn.get("customer_contact"),
         "shipping_address": txn["shipping_address"],
+        "address_struct": txn.get("address_struct"),
         "items": txn["items"],
         "total": txn["amount"],
         "currency": txn["currency"],
         "status": "paid",
         "confirmation_email_sent": False,
         "confirmation_email_error": None,
+        "shiprocket_order_id": None,
+        "shiprocket_shipment_id": None,
+        "awb_number": None,
+        "courier_name": None,
+        "shiprocket_error": None,
+        "tracking_cached_at": None,
+        "tracking": None,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.orders.insert_one(order_doc)
@@ -312,6 +331,18 @@ async def _finalize_paid_order(txn: dict, rzp_payment_id: Optional[str]) -> dict
     )
     order_doc["confirmation_email_sent"] = sent
     order_doc["confirmation_email_error"] = error
+
+    # Best-effort Shiprocket adhoc order creation (does not block on failure)
+    sr_result = await shiprocket_client.create_adhoc_order(order_doc)
+    sr_update = {
+        "shiprocket_order_id": sr_result.get("shiprocket_order_id") or None,
+        "shiprocket_shipment_id": sr_result.get("shipment_id") or None,
+        "awb_number": sr_result.get("awb_number") or None,
+        "courier_name": sr_result.get("courier_name") or None,
+        "shiprocket_error": None if sr_result.get("success") else sr_result.get("error"),
+    }
+    await db.orders.update_one({"order_id": order_id}, {"$set": sr_update})
+    order_doc.update(sr_update)
     return order_doc
 
 
@@ -372,6 +403,7 @@ async def create_order(req: OrderCreateRequest):
         "customer_email": req.customer_email,
         "customer_contact": req.customer_contact,
         "shipping_address": req.shipping_address,
+        "address_struct": req.address_struct.model_dump() if req.address_struct else None,
         "items": detailed_items,
         "amount": total,
         "amount_minor": amount_minor,
@@ -545,6 +577,61 @@ async def lookup_order(req: OrderLookupRequest):
     if payment_status == "complete":
         payment_status = "paid"
 
+    # ---- Live Shiprocket tracking (cached for 30 minutes) ----
+    tracking_info = None
+    courier_name = None
+    awb_number = None
+    tracking_url = None
+    shipping_status = "preparing" if payment_status == "paid" else "awaiting_payment"
+
+    if order and order.get("awb_number"):
+        awb_number = order["awb_number"]
+        courier_name = order.get("courier_name")
+        cached = order.get("tracking")
+        cached_at = order.get("tracking_cached_at")
+        fresh = False
+        if cached and cached_at:
+            try:
+                age = (datetime.now(timezone.utc) - datetime.fromisoformat(cached_at)).total_seconds()
+                fresh = age < 1800
+            except Exception:
+                fresh = False
+        if fresh:
+            tracking_info = cached
+        else:
+            live = await shiprocket_client.track_by_awb(awb_number)
+            if not live.get("error"):
+                tracking_info = {
+                    "current_status": live.get("current_status"),
+                    "current_location": live.get("current_location"),
+                    "estimated_delivery": live.get("estimated_delivery"),
+                    "courier_name": live.get("courier_name") or courier_name,
+                    "tracking_url": live.get("tracking_url"),
+                }
+                await db.orders.update_one(
+                    {"order_id": order_id},
+                    {"$set": {
+                        "tracking": tracking_info,
+                        "tracking_cached_at": datetime.now(timezone.utc).isoformat(),
+                        "courier_name": tracking_info["courier_name"] or courier_name,
+                    }},
+                )
+            elif cached:
+                tracking_info = cached
+        if tracking_info:
+            courier_name = tracking_info.get("courier_name") or courier_name
+            tracking_url = tracking_info.get("tracking_url")
+            shipping_status = "in_transit"
+            cs = (tracking_info.get("current_status") or "").lower()
+            if "delivered" in cs:
+                shipping_status = "delivered"
+            elif "out for delivery" in cs:
+                shipping_status = "out_for_delivery"
+            elif "picked up" in cs or "manifested" in cs:
+                shipping_status = "dispatched"
+    elif order and order.get("shiprocket_error"):
+        shipping_status = "fulfillment_pending"
+
     return {
         "order_id": order_id,
         "customer_name": source["customer_name"],
@@ -552,8 +639,12 @@ async def lookup_order(req: OrderLookupRequest):
         "total": source.get("total", txn["amount"] if txn else 0),
         "currency": source["currency"],
         "payment_status": payment_status,
-        "shipping_status": "preparing" if payment_status == "paid" else "awaiting_payment",
+        "shipping_status": shipping_status,
         "shipping_address": source["shipping_address"],
+        "courier_name": courier_name,
+        "awb_number": awb_number,
+        "tracking_url": tracking_url,
+        "tracking": tracking_info,
         "created_at": source["created_at"],
     }
 

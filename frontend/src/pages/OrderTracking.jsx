@@ -7,26 +7,16 @@ import FadeSection from "../components/FadeSection";
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 const STATUS_COPY = {
-  paid: {
-    label: "Payment Confirmed",
-    next: "Your fragrance is being prepared for despatch.",
-  },
-  initiated: {
-    label: "Awaiting Payment",
-    next: "We have not yet received payment for this order.",
-  },
-  failed: {
-    label: "Payment Failed",
-    next: "Please return to your cart and try again.",
-  },
-  preparing: {
-    label: "Preparing for Despatch",
-    next: "Your order is being prepared by the atelier.",
-  },
-  awaiting_payment: {
-    label: "Awaiting Payment",
-    next: "Payment has not yet been received.",
-  },
+  paid: { label: "Payment Confirmed", next: "Your fragrance is being prepared for despatch." },
+  initiated: { label: "Awaiting Payment", next: "We have not yet received payment for this order." },
+  failed: { label: "Payment Failed", next: "Please return to your cart and try again." },
+  preparing: { label: "Preparing for Despatch", next: "Your order is being prepared by the atelier." },
+  awaiting_payment: { label: "Awaiting Payment", next: "Payment has not yet been received." },
+  fulfillment_pending: { label: "Awaiting Fulfilment", next: "Your order is paid and queued for the courier — a tracking number will appear here shortly." },
+  dispatched: { label: "Dispatched", next: "Your fragrance has left the atelier and is on its way." },
+  in_transit: { label: "In Transit", next: "Your order is travelling to you." },
+  out_for_delivery: { label: "Out for Delivery", next: "Your fragrance is with the courier and arrives today." },
+  delivered: { label: "Delivered", next: "Your fragrance has arrived. We hope you love it." },
 };
 
 export default function OrderTracking() {
@@ -181,6 +171,74 @@ export default function OrderTracking() {
               </div>
 
               <hr className="gold-divider mb-8" />
+
+              {(order.courier_name || order.awb_number || order.tracking) && (
+                <div
+                  data-testid="track-shiprocket-block"
+                  className="bg-cream border border-gold/40 p-6 lg:p-8 mb-10"
+                >
+                  <p className="text-[10px] uppercase tracking-luxe text-gold mb-4">
+                    Courier
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+                    {order.courier_name && (
+                      <div>
+                        <p className="text-[10px] uppercase tracking-luxe text-ink/60 mb-1">
+                          Partner
+                        </p>
+                        <p
+                          className="font-serif text-lg text-ink"
+                          data-testid="track-courier"
+                        >
+                          {order.courier_name}
+                        </p>
+                      </div>
+                    )}
+                    {order.awb_number && (
+                      <div>
+                        <p className="text-[10px] uppercase tracking-luxe text-ink/60 mb-1">
+                          AWB
+                        </p>
+                        <p
+                          className="font-mono text-sm text-ink"
+                          data-testid="track-awb"
+                        >
+                          {order.awb_number}
+                        </p>
+                      </div>
+                    )}
+                    {order.tracking?.estimated_delivery && (
+                      <div>
+                        <p className="text-[10px] uppercase tracking-luxe text-ink/60 mb-1">
+                          ETA
+                        </p>
+                        <p className="text-sm text-ink">
+                          {order.tracking.estimated_delivery}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                  {order.tracking?.current_location && (
+                    <p className="text-sm text-ink/70 font-light mt-5">
+                      Currently at{" "}
+                      <span className="text-ink">
+                        {order.tracking.current_location}
+                      </span>
+                    </p>
+                  )}
+                  {order.tracking_url && (
+                    <a
+                      href={order.tracking_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      data-testid="track-external-url"
+                      className="inline-block mt-6 text-[10px] uppercase tracking-luxe text-gold link-underline"
+                    >
+                      View on courier site →
+                    </a>
+                  )}
+                </div>
+              )}
 
               <p className="text-[10px] uppercase tracking-luxe text-ink mb-6">
                 Items

@@ -17,14 +17,28 @@ export default function Cart() {
     customer_name: "",
     customer_email: "",
     customer_contact: "",
-    shipping_address: "",
+    address_line1: "",
+    address_line2: "",
+    city: "",
+    state: "",
+    postal_code: "",
+    country: "India",
   });
 
   const update = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
   const startCheckout = async (e) => {
     e.preventDefault();
-    if (!form.customer_name || !form.customer_email || !form.shipping_address) {
+    const required = [
+      "customer_name",
+      "customer_email",
+      "customer_contact",
+      "address_line1",
+      "city",
+      "state",
+      "postal_code",
+    ];
+    if (required.some((k) => !form[k])) {
       toast.error("Please complete all required fields.");
       return;
     }
@@ -32,11 +46,28 @@ export default function Cart() {
     try {
       const Razorpay = await loadRazorpay();
 
+      const shipping_address = [
+        form.address_line1,
+        form.address_line2,
+        `${form.city}, ${form.state} ${form.postal_code}`,
+        form.country,
+      ]
+        .filter(Boolean)
+        .join("\n");
+
       const res = await axios.post(`${API}/checkout/order`, {
         customer_name: form.customer_name,
         customer_email: form.customer_email,
         customer_contact: form.customer_contact || null,
-        shipping_address: form.shipping_address,
+        shipping_address,
+        address_struct: {
+          line1: form.address_line1,
+          line2: form.address_line2 || "",
+          city: form.city,
+          state: form.state,
+          postal_code: form.postal_code,
+          country: form.country || "India",
+        },
         items: items.map((i) => ({ slug: i.slug, quantity: i.quantity })),
       });
 
@@ -279,7 +310,7 @@ export default function Cart() {
                   />
                 </div>
                 <div>
-                  <label className="luxe-label">Phone (optional)</label>
+                  <label className="luxe-label">Phone</label>
                   <input
                     type="tel"
                     data-testid="checkout-contact"
@@ -287,18 +318,73 @@ export default function Cart() {
                     value={form.customer_contact}
                     onChange={update("customer_contact")}
                     placeholder="+91…"
+                    required
                   />
                 </div>
                 <div>
-                  <label className="luxe-label">Shipping Address</label>
-                  <textarea
-                    data-testid="checkout-address"
+                  <label className="luxe-label">Address Line 1</label>
+                  <input
+                    data-testid="checkout-address-line1"
                     className="luxe-input"
-                    rows={3}
-                    value={form.shipping_address}
-                    onChange={update("shipping_address")}
+                    value={form.address_line1}
+                    onChange={update("address_line1")}
+                    placeholder="Street, building, apartment"
                     required
                   />
+                </div>
+                <div>
+                  <label className="luxe-label">Address Line 2 (optional)</label>
+                  <input
+                    data-testid="checkout-address-line2"
+                    className="luxe-input"
+                    value={form.address_line2}
+                    onChange={update("address_line2")}
+                    placeholder="Landmark, neighbourhood"
+                  />
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                  <div>
+                    <label className="luxe-label">City</label>
+                    <input
+                      data-testid="checkout-city"
+                      className="luxe-input"
+                      value={form.city}
+                      onChange={update("city")}
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="luxe-label">State</label>
+                    <input
+                      data-testid="checkout-state"
+                      className="luxe-input"
+                      value={form.state}
+                      onChange={update("state")}
+                      required
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                  <div>
+                    <label className="luxe-label">Postal Code</label>
+                    <input
+                      data-testid="checkout-postal"
+                      className="luxe-input"
+                      value={form.postal_code}
+                      onChange={update("postal_code")}
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="luxe-label">Country</label>
+                    <input
+                      data-testid="checkout-country"
+                      className="luxe-input"
+                      value={form.country}
+                      onChange={update("country")}
+                      required
+                    />
+                  </div>
                 </div>
               </div>
 
