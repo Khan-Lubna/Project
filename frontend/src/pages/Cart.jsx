@@ -1,19 +1,22 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import axios from "axios";
 import { Trash2, Minus, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useCart } from "../context/CartContext";
+import { loadRazorpay } from "../lib/razorpay";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 export default function Cart() {
-  const { items, removeItem, updateQty, subtotal } = useCart();
+  const navigate = useNavigate();
+  const { items, removeItem, updateQty, subtotal, clear } = useCart();
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [form, setForm] = useState({
     customer_name: "",
     customer_email: "",
+    customer_contact: "",
     shipping_address: "",
   });
 
@@ -22,30 +25,88 @@ export default function Cart() {
   const startCheckout = async (e) => {
     e.preventDefault();
     if (!form.customer_name || !form.customer_email || !form.shipping_address) {
-      toast.error("Please complete all fields.");
+      toast.error("Please complete all required fields.");
       return;
     }
     setSubmitting(true);
     try {
-      const res = await axios.post(`${API}/checkout/session`, {
-        ...form,
+      const Razorpay = await loadRazorpay();
+
+      const res = await axios.post(`${API}/checkout/order`, {
+        customer_name: form.customer_name,
+        customer_email: form.customer_email,
+        customer_contact: form.customer_contact || null,
+        shipping_address: form.shipping_address,
         items: items.map((i) => ({ slug: i.slug, quantity: i.quantity })),
-        origin_url: window.location.origin,
       });
-      // Persist pending session so success page can show order details
-      sessionStorage.setItem(
-        "mossero_pending_session",
-        JSON.stringify({
-          session_id: res.data.session_id,
-          order_id: res.data.order_id,
-          total: res.data.total,
-        })
-      );
-      // Redirect to Stripe-hosted checkout
-      window.location.href = res.data.url;
+
+      const {
+        order_id,
+        rzp_order_id,
+        rzp_key_id,
+        amount,
+        currency,
+      } = res.data;
+
+      const options = {
+        key: rzp_key_id,
+        amount,
+        currency,
+        order_id: rzp_order_id,
+        name: "MOSSERO",
+        description: items
+          .map((i) => `${i.name} × ${i.quantity}`)
+          .join(", "),
+        image:
+          "https://images.unsplash.com/photo-1774682060959-efe13b7a12b9?crop=entropy&cs=srgb&fm=jpg&q=85&w=200",
+        prefill: {
+          name: form.customer_name,
+          email: form.customer_email,
+          contact: form.customer_contact || "",
+        },
+        notes: { order_id, shipping: form.shipping_address.slice(0, 200) },
+        theme: { color: "#C4A258" },
+        handler: async (rzpResponse) => {
+          try {
+            await axios.post(`${API}/checkout/verify`, {
+              order_id,
+              razorpay_order_id: rzpResponse.razorpay_order_id,
+              razorpay_payment_id: rzpResponse.razorpay_payment_id,
+              razorpay_signature: rzpResponse.razorpay_signature,
+            });
+            clear();
+            navigate(`/cart/success?order_id=${encodeURIComponent(order_id)}`);
+          } catch (err) {
+            toast.error("Payment verification failed", {
+              description:
+                err?.response?.data?.detail ||
+                "Please contact us if you have been charged.",
+            });
+            navigate(`/cart/success?order_id=${encodeURIComponent(order_id)}&verify=failed`);
+          }
+        },
+        modal: {
+          ondismiss: () => {
+            setSubmitting(false);
+            toast.message("Payment cancelled", {
+              description: "Your cart is preserved. You may resume any time.",
+            });
+          },
+        },
+      };
+
+      const rzp = new Razorpay(options);
+      rzp.on("payment.failed", (resp) => {
+        toast.error("Payment failed", {
+          description:
+            resp?.error?.description || "Please try a different method.",
+        });
+        setSubmitting(false);
+      });
+      rzp.open();
     } catch (err) {
       toast.error("Checkout failed", {
-        description: err?.response?.data?.detail || "Please try again.",
+        description: err?.response?.data?.detail || err.message || "Please try again.",
       });
       setSubmitting(false);
     }
@@ -81,9 +142,16 @@ export default function Cart() {
                   data-testid={`cart-item-${item.slug}`}
                   className="flex gap-6 lg:gap-10 py-10 border-b border-ink/10"
                 >
-                  <Link to={`/fragrances/${item.slug}`} className="w-28 lg:w-40 shrink-0">
+                  <Link
+                    to={`/fragrances/${item.slug}`}
+                    className="w-28 lg:w-40 shrink-0"
+                  >
                     <div className="aspect-square overflow-hidden bg-offwhite">
-                      <img src={item.image} alt={item.name} className="w-full h-full object-cover" />
+                      <img
+                        src={item.image}
+                        alt={item.name}
+                        className="w-full h-full object-cover"
+                      />
                     </div>
                   </Link>
                   <div className="flex-1 flex flex-col">
@@ -100,13 +168,17 @@ export default function Cart() {
                       <div className="flex items-center border border-ink/30">
                         <button
                           data-testid={`cart-decrement-${item.slug}`}
-                          onClick={() => updateQty(item.slug, Math.max(1, item.quantity - 1))}
+                          onClick={() =>
+                            updateQty(item.slug, Math.max(1, item.quantity - 1))
+                          }
                           className="px-3 py-2 hover:text-gold transition-colors"
                           aria-label="Decrease"
                         >
                           <Minus size={12} strokeWidth={1.25} />
                         </button>
-                        <span className="px-5 text-sm tracking-luxe">{item.quantity}</span>
+                        <span className="px-5 text-sm tracking-luxe">
+                          {item.quantity}
+                        </span>
                         <button
                           data-testid={`cart-increment-${item.slug}`}
                           onClick={() => updateQty(item.slug, item.quantity + 1)}
@@ -132,10 +204,14 @@ export default function Cart() {
 
             <aside className="lg:col-span-4">
               <div className="border border-gold/40 p-10 bg-offwhite">
-                <p className="text-[11px] uppercase tracking-luxe text-gold mb-6">Summary</p>
+                <p className="text-[11px] uppercase tracking-luxe text-gold mb-6">
+                  Summary
+                </p>
                 <div className="flex justify-between py-3 text-sm font-light">
                   <span>Subtotal</span>
-                  <span data-testid="cart-subtotal">${subtotal.toFixed(2)}</span>
+                  <span data-testid="cart-subtotal">
+                    ${subtotal.toFixed(2)}
+                  </span>
                 </div>
                 <div className="flex justify-between py-3 text-sm font-light text-ink/60">
                   <span>Shipping</span>
@@ -154,7 +230,7 @@ export default function Cart() {
                   Proceed to Checkout
                 </button>
                 <p className="text-[10px] uppercase tracking-luxe text-ink/50 mt-6 text-center">
-                  Secured by Stripe
+                  Secured by Razorpay
                 </p>
               </div>
             </aside>
@@ -203,6 +279,17 @@ export default function Cart() {
                   />
                 </div>
                 <div>
+                  <label className="luxe-label">Phone (optional)</label>
+                  <input
+                    type="tel"
+                    data-testid="checkout-contact"
+                    className="luxe-input"
+                    value={form.customer_contact}
+                    onChange={update("customer_contact")}
+                    placeholder="+91…"
+                  />
+                </div>
+                <div>
                   <label className="luxe-label">Shipping Address</label>
                   <textarea
                     data-testid="checkout-address"
@@ -216,8 +303,12 @@ export default function Cart() {
               </div>
 
               <div className="mt-10 pt-8 border-t border-ink/10 flex justify-between">
-                <span className="text-[11px] uppercase tracking-luxe text-ink">Total</span>
-                <span className="font-serif text-xl">${subtotal.toFixed(2)}</span>
+                <span className="text-[11px] uppercase tracking-luxe text-ink">
+                  Total
+                </span>
+                <span className="font-serif text-xl">
+                  ${subtotal.toFixed(2)}
+                </span>
               </div>
 
               <button
@@ -226,10 +317,10 @@ export default function Cart() {
                 disabled={submitting}
                 className="btn-gold w-full mt-8"
               >
-                {submitting ? "Redirecting to Stripe…" : "Continue to Payment"}
+                {submitting ? "Opening Razorpay…" : "Continue to Payment"}
               </button>
               <p className="text-[10px] uppercase tracking-luxe text-ink/50 mt-6 text-center">
-                You will be redirected to Stripe to complete payment securely.
+                Secure payment by Razorpay — cards, UPI, netbanking and wallets.
               </p>
               <button
                 type="button"

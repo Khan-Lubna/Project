@@ -5,16 +5,15 @@ from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import asyncio
 import logging
+import hmac
+import hashlib
 from pathlib import Path
 from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional
 import uuid
 from datetime import datetime, timezone
 import resend
-from emergentintegrations.payments.stripe.checkout import (
-    StripeCheckout,
-    CheckoutSessionRequest,
-)
+import razorpay
 
 
 ROOT_DIR = Path(__file__).parent
@@ -31,7 +30,13 @@ CONTACT_RECIPIENT_EMAIL = os.environ.get('CONTACT_RECIPIENT_EMAIL', 'mossero.in@
 if RESEND_API_KEY:
     resend.api_key = RESEND_API_KEY
 
-STRIPE_API_KEY = os.environ.get('STRIPE_API_KEY', '')
+RAZORPAY_KEY_ID = os.environ.get('RAZORPAY_KEY_ID', '')
+RAZORPAY_KEY_SECRET = os.environ.get('RAZORPAY_KEY_SECRET', '')
+RAZORPAY_WEBHOOK_SECRET = os.environ.get('RAZORPAY_WEBHOOK_SECRET', '')
+
+rzp_client = None
+if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET:
+    rzp_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -52,7 +57,7 @@ PRODUCTS = [
         "size": "50ml",
         "target": "For Him",
         "tagline": "Power in every presence.",
-        "price": 185.00,
+        "price": 100.00,
         "currency": "USD",
         "theme": "dark",
         "description": (
@@ -76,7 +81,7 @@ PRODUCTS = [
         "size": "50ml",
         "target": "For Her",
         "tagline": "A trace of the eternal feminine.",
-        "price": 185.00,
+        "price": 100.00,
         "currency": "USD",
         "theme": "light",
         "description": (
@@ -116,20 +121,31 @@ class CartItem(BaseModel):
     quantity: int = Field(ge=1, le=20)
 
 
-class CheckoutSessionCreate(BaseModel):
+class OrderCreateRequest(BaseModel):
     customer_name: str
     customer_email: EmailStr
+    customer_contact: Optional[str] = None
     shipping_address: str
     items: List[CartItem]
-    origin_url: str
 
 
-class CheckoutSessionCreateResponse(BaseModel):
-    url: str
-    session_id: str
+class OrderCreateResponse(BaseModel):
     order_id: str
-    total: float
+    rzp_order_id: str
+    rzp_key_id: str
+    amount: int  # smallest unit (cents)
     currency: str
+    total: float
+    customer_name: str
+    customer_email: EmailStr
+    customer_contact: Optional[str] = None
+
+
+class VerifyPaymentRequest(BaseModel):
+    order_id: str
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
 
 
 class ContactRequest(BaseModel):
@@ -158,18 +174,21 @@ async def get_product(slug: str):
     raise HTTPException(status_code=404, detail="Product not found")
 
 
-def _build_stripe(origin_url: str) -> StripeCheckout:
-    webhook_url = f"{origin_url.rstrip('/')}/api/webhook/stripe"
-    return StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
+def _verify_signature(payload: str, signature: str, secret: str) -> bool:
+    expected = hmac.new(
+        secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(expected, signature)
 
 
-@api_router.post("/checkout/session", response_model=CheckoutSessionCreateResponse)
-async def create_checkout_session(req: CheckoutSessionCreate):
-    if not STRIPE_API_KEY:
-        raise HTTPException(status_code=500, detail="Stripe is not configured")
+@api_router.post("/checkout/order", response_model=OrderCreateResponse)
+async def create_order(req: OrderCreateRequest):
+    if rzp_client is None:
+        raise HTTPException(status_code=500, detail="Razorpay is not configured")
 
     by_slug = {p["slug"]: p for p in PRODUCTS}
     total = 0.0
+    currency = "USD"
     detailed_items = []
     for item in req.items:
         p = by_slug.get(item.slug)
@@ -177,6 +196,7 @@ async def create_checkout_session(req: CheckoutSessionCreate):
             raise HTTPException(status_code=400, detail=f"Unknown product: {item.slug}")
         line_total = p["price"] * item.quantity
         total += line_total
+        currency = p["currency"]
         detailed_items.append({
             "slug": item.slug,
             "name": p["name"],
@@ -189,158 +209,188 @@ async def create_checkout_session(req: CheckoutSessionCreate):
         raise HTTPException(status_code=400, detail="Cart is empty")
 
     total = round(total, 2)
+    amount_minor = int(round(total * 100))  # USD -> cents
     order_id = f"MSR-{uuid.uuid4().hex[:8].upper()}"
 
-    origin = req.origin_url.rstrip('/')
-    success_url = f"{origin}/cart/success?session_id={{CHECKOUT_SESSION_ID}}"
-    cancel_url = f"{origin}/cart"
-
-    stripe_checkout = _build_stripe(origin)
-    metadata = {
-        "order_id": order_id,
-        "customer_email": req.customer_email,
-        "customer_name": req.customer_name,
-        "source": "mossero_web",
-    }
-    checkout_request = CheckoutSessionRequest(
-        amount=float(total),
-        currency="usd",
-        success_url=success_url,
-        cancel_url=cancel_url,
-        metadata=metadata,
-    )
-    session = await stripe_checkout.create_checkout_session(checkout_request)
+    try:
+        rzp_order = await asyncio.to_thread(
+            rzp_client.order.create,
+            {
+                "amount": amount_minor,
+                "currency": currency,
+                "receipt": order_id,
+                "payment_capture": 1,
+                "notes": {
+                    "order_id": order_id,
+                    "customer_email": req.customer_email,
+                    "customer_name": req.customer_name,
+                },
+            },
+        )
+    except Exception as e:
+        logger.error(f"Razorpay order create failed: {e}")
+        raise HTTPException(status_code=502, detail=f"Razorpay error: {e}")
 
     txn_doc = {
         "order_id": order_id,
-        "session_id": session.session_id,
+        "rzp_order_id": rzp_order["id"],
         "customer_name": req.customer_name,
         "customer_email": req.customer_email,
+        "customer_contact": req.customer_contact,
         "shipping_address": req.shipping_address,
         "items": detailed_items,
         "amount": total,
-        "currency": "usd",
-        "metadata": metadata,
+        "amount_minor": amount_minor,
+        "currency": currency,
         "payment_status": "initiated",
         "status": "open",
+        "rzp_payment_id": None,
+        "rzp_signature": None,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.payment_transactions.insert_one(txn_doc)
 
-    return CheckoutSessionCreateResponse(
-        url=session.url,
-        session_id=session.session_id,
+    return OrderCreateResponse(
         order_id=order_id,
+        rzp_order_id=rzp_order["id"],
+        rzp_key_id=RAZORPAY_KEY_ID,
+        amount=amount_minor,
+        currency=currency,
         total=total,
-        currency="usd",
+        customer_name=req.customer_name,
+        customer_email=req.customer_email,
+        customer_contact=req.customer_contact,
     )
 
 
-@api_router.get("/checkout/status/{session_id}")
-async def get_checkout_status(session_id: str, request: Request):
-    if not STRIPE_API_KEY:
-        raise HTTPException(status_code=500, detail="Stripe is not configured")
+@api_router.post("/checkout/verify")
+async def verify_payment(req: VerifyPaymentRequest):
+    if rzp_client is None:
+        raise HTTPException(status_code=500, detail="Razorpay is not configured")
 
     txn = await db.payment_transactions.find_one(
-        {"session_id": session_id}, {"_id": 0}
+        {"order_id": req.order_id}, {"_id": 0}
     )
     if not txn:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail="Order not found")
+    if txn["rzp_order_id"] != req.razorpay_order_id:
+        raise HTTPException(status_code=400, detail="Order mismatch")
 
-    # If already finalized as paid in our DB, return cached
+    # If already paid, return cached (idempotent)
     if txn.get("payment_status") == "paid":
         return {
-            "session_id": session_id,
-            "order_id": txn["order_id"],
+            "order_id": req.order_id,
             "payment_status": "paid",
-            "status": txn.get("status", "complete"),
-            "amount_total": int(round(txn["amount"] * 100)),
+            "amount_total": txn["amount_minor"],
             "currency": txn["currency"],
         }
 
-    origin = str(request.base_url).rstrip('/')
-    stripe_checkout = _build_stripe(origin)
-    try:
-        status_resp = await stripe_checkout.get_checkout_status(session_id)
-    except Exception as e:
-        logger.warning(f"Stripe status lookup failed for {session_id}: {e}")
-        # Return cached state — webhook will update once Stripe confirms
-        return {
-            "session_id": session_id,
-            "order_id": txn["order_id"],
-            "payment_status": txn.get("payment_status", "initiated"),
-            "status": txn.get("status", "open"),
-            "amount_total": int(round(txn["amount"] * 100)),
-            "currency": txn["currency"],
-        }
-
-    new_status = status_resp.status
-    new_payment_status = status_resp.payment_status
-
-    update = {
-        "$set": {
-            "payment_status": new_payment_status,
-            "status": new_status,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-    }
-    await db.payment_transactions.update_one({"session_id": session_id}, update)
-
-    # On first transition to paid, write a final order record (idempotent)
-    if new_payment_status == "paid":
-        existing = await db.orders.find_one({"order_id": txn["order_id"]}, {"_id": 0})
-        if not existing:
-            order_doc = {
-                "order_id": txn["order_id"],
-                "session_id": session_id,
-                "customer_name": txn["customer_name"],
-                "customer_email": txn["customer_email"],
-                "shipping_address": txn["shipping_address"],
-                "items": txn["items"],
-                "total": txn["amount"],
-                "currency": txn["currency"],
-                "status": "paid",
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }
-            await db.orders.insert_one(order_doc)
-
-    return {
-        "session_id": session_id,
-        "order_id": txn["order_id"],
-        "payment_status": new_payment_status,
-        "status": new_status,
-        "amount_total": status_resp.amount_total,
-        "currency": status_resp.currency,
-    }
-
-
-@api_router.post("/webhook/stripe")
-async def stripe_webhook(request: Request):
-    if not STRIPE_API_KEY:
-        raise HTTPException(status_code=500, detail="Stripe is not configured")
-
-    body = await request.body()
-    signature = request.headers.get("Stripe-Signature", "")
-    origin = str(request.base_url).rstrip('/')
-    stripe_checkout = _build_stripe(origin)
-    try:
-        event = await stripe_checkout.handle_webhook(body, signature)
-    except Exception as e:
-        logger.error(f"Stripe webhook error: {e}")
-        raise HTTPException(status_code=400, detail="Invalid webhook")
-
-    session_id = getattr(event, "session_id", None)
-    payment_status = getattr(event, "payment_status", None)
-    if session_id and payment_status:
+    payload = f"{req.razorpay_order_id}|{req.razorpay_payment_id}"
+    if not _verify_signature(payload, req.razorpay_signature, RAZORPAY_KEY_SECRET):
         await db.payment_transactions.update_one(
-            {"session_id": session_id},
+            {"order_id": req.order_id},
             {"$set": {
-                "payment_status": payment_status,
-                "webhook_event": getattr(event, "event_type", None),
+                "payment_status": "failed",
+                "status": "signature_invalid",
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }},
         )
+        raise HTTPException(status_code=400, detail="Invalid signature")
+
+    # Signature valid → mark paid
+    await db.payment_transactions.update_one(
+        {"order_id": req.order_id},
+        {"$set": {
+            "payment_status": "paid",
+            "status": "complete",
+            "rzp_payment_id": req.razorpay_payment_id,
+            "rzp_signature": req.razorpay_signature,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+
+    existing_order = await db.orders.find_one({"order_id": req.order_id}, {"_id": 0})
+    if not existing_order:
+        order_doc = {
+            "order_id": req.order_id,
+            "rzp_order_id": req.razorpay_order_id,
+            "rzp_payment_id": req.razorpay_payment_id,
+            "customer_name": txn["customer_name"],
+            "customer_email": txn["customer_email"],
+            "customer_contact": txn.get("customer_contact"),
+            "shipping_address": txn["shipping_address"],
+            "items": txn["items"],
+            "total": txn["amount"],
+            "currency": txn["currency"],
+            "status": "paid",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.orders.insert_one(order_doc)
+
+    return {
+        "order_id": req.order_id,
+        "payment_status": "paid",
+        "amount_total": txn["amount_minor"],
+        "currency": txn["currency"],
+    }
+
+
+@api_router.get("/checkout/status/{order_id}")
+async def get_order_status(order_id: str):
+    txn = await db.payment_transactions.find_one(
+        {"order_id": order_id}, {"_id": 0}
+    )
+    if not txn:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return {
+        "order_id": order_id,
+        "payment_status": txn.get("payment_status", "initiated"),
+        "status": txn.get("status", "open"),
+        "amount_total": txn["amount_minor"],
+        "currency": txn["currency"],
+    }
+
+
+@api_router.post("/webhook/razorpay")
+async def razorpay_webhook(request: Request):
+    body = await request.body()
+    signature = request.headers.get("X-Razorpay-Signature", "")
+
+    if RAZORPAY_WEBHOOK_SECRET:
+        if not _verify_signature(body.decode("utf-8"), signature, RAZORPAY_WEBHOOK_SECRET):
+            raise HTTPException(status_code=400, detail="Invalid webhook signature")
+
+    try:
+        import json
+        payload = json.loads(body.decode("utf-8"))
+    except Exception as e:
+        logger.error(f"Razorpay webhook parse error: {e}")
+        raise HTTPException(status_code=400, detail="Invalid payload")
+
+    event = payload.get("event")
+    payment_entity = payload.get("payload", {}).get("payment", {}).get("entity", {})
+    rzp_order_id = payment_entity.get("order_id")
+    rzp_payment_id = payment_entity.get("id")
+    status = payment_entity.get("status")
+
+    if rzp_order_id:
+        update_fields = {
+            "webhook_event": event,
+            "rzp_payment_id": rzp_payment_id,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if status == "captured" or event == "payment.captured":
+            update_fields["payment_status"] = "paid"
+            update_fields["status"] = "complete"
+        elif event in ("payment.failed",):
+            update_fields["payment_status"] = "failed"
+            update_fields["status"] = "failed"
+        await db.payment_transactions.update_one(
+            {"rzp_order_id": rzp_order_id},
+            {"$set": update_fields},
+        )
+
     return {"received": True}
 
 
@@ -410,6 +460,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
