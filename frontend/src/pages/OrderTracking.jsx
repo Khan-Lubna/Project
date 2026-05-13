@@ -244,25 +244,31 @@ export default function OrderTracking() {
                 Items
               </p>
               <ul className="space-y-4 mb-10">
-                {order.items.map((it) => (
-                  <li
-                    key={it.slug}
-                    data-testid={`track-item-${it.slug}`}
-                    className="flex justify-between items-baseline"
-                  >
-                    <div>
-                      <p className="font-serif text-xl text-ink tracking-wider">
-                        {it.name}
+                {order.items.map((it) => {
+                  const line =
+                    typeof it.line_total === "number"
+                      ? it.line_total
+                      : (it.unit_price || 0) * (it.quantity || 0);
+                  return (
+                    <li
+                      key={it.slug}
+                      data-testid={`track-item-${it.slug}`}
+                      className="flex justify-between items-baseline"
+                    >
+                      <div>
+                        <p className="font-serif text-xl text-ink tracking-wider">
+                          {it.name}
+                        </p>
+                        <p className="text-[10px] uppercase tracking-luxe text-ink/60 mt-1">
+                          50ml × {it.quantity}
+                        </p>
+                      </div>
+                      <p className="font-serif text-lg text-ink">
+                        ${line.toFixed(2)}
                       </p>
-                      <p className="text-[10px] uppercase tracking-luxe text-ink/60 mt-1">
-                        50ml × {it.quantity}
-                      </p>
-                    </div>
-                    <p className="font-serif text-lg text-ink">
-                      ${it.line_total.toFixed(2)}
-                    </p>
-                  </li>
-                ))}
+                    </li>
+                  );
+                })}
               </ul>
 
               <div className="flex justify-between items-baseline border-t border-ink/15 pt-6 mb-10">
@@ -273,7 +279,7 @@ export default function OrderTracking() {
                   className="font-serif text-2xl text-ink"
                   data-testid="track-total"
                 >
-                  ${order.total.toFixed(2)} {order.currency.toUpperCase()}
+                  ${(order.total ?? 0).toFixed(2)} {(order.currency || "USD").toUpperCase()}
                 </span>
               </div>
 

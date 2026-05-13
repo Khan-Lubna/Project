@@ -95,7 +95,7 @@ export default function Cart() {
           email: form.customer_email,
           contact: form.customer_contact || "",
         },
-        notes: { order_id, shipping: form.shipping_address.slice(0, 200) },
+        notes: { order_id, shipping: shipping_address.slice(0, 200) },
         theme: { color: "#C4A258" },
         handler: async (rzpResponse) => {
           try {

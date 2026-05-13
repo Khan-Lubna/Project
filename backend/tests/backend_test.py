@@ -303,8 +303,22 @@ class TestWebhook:
                 }
             },
         }
-        # Empty webhook secret => no signature required
-        r = api.post(f"{BASE_URL}/api/webhook/razorpay", json=body)
+        import json as _json
+        raw = _json.dumps(body, separators=(',', ':'))
+        # Read webhook secret
+        wh_secret = ""
+        try:
+            with open('/app/backend/.env') as f:
+                for line in f:
+                    if line.strip().startswith('RAZORPAY_WEBHOOK_SECRET='):
+                        wh_secret = line.split('=', 1)[1].strip().strip('"').strip("'")
+        except Exception:
+            pass
+        headers = {"Content-Type": "application/json"}
+        if wh_secret:
+            sig = hmac.new(wh_secret.encode(), raw.encode(), hashlib.sha256).hexdigest()
+            headers["X-Razorpay-Signature"] = sig
+        r = api.post(f"{BASE_URL}/api/webhook/razorpay", data=raw, headers=headers)
         assert r.status_code == 200, r.text
         assert r.json().get("received") is True
 
@@ -401,3 +415,220 @@ class TestOrderLookup:
         assert d["shipping_status"] == "awaiting_payment"
         assert d["total"] == 100.00
         assert d["currency"] == "USD"
+
+
+# ---------- Shiprocket integration tests ----------
+import asyncio
+import sys
+sys.path.insert(0, '/app/backend')
+
+
+class TestShiprocketAuth:
+    """LIVE Shiprocket auth — confirms JWT exchange works."""
+
+    def test_login_returns_jwt(self):
+        # Load env from backend/.env
+        try:
+            with open('/app/backend/.env') as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('SHIPROCKET_EMAIL='):
+                        os.environ['SHIPROCKET_EMAIL'] = line.split('=', 1)[1].strip().strip('"').strip("'")
+                    elif line.startswith('SHIPROCKET_PASSWORD='):
+                        os.environ['SHIPROCKET_PASSWORD'] = line.split('=', 1)[1].strip().strip('"').strip("'")
+        except Exception:
+            pass
+        if not os.environ.get('SHIPROCKET_EMAIL') or not os.environ.get('SHIPROCKET_PASSWORD'):
+            pytest.skip("Shiprocket creds not set")
+
+        # Reset module cache
+        import importlib
+        import shiprocket_client
+        importlib.reload(shiprocket_client)
+        token = asyncio.run(shiprocket_client._login())
+        assert token is not None, "Shiprocket _login returned None"
+        assert isinstance(token, str)
+        assert len(token) > 100, f"Token suspiciously short: {len(token)} chars"
+
+    def test_is_configured_true(self):
+        import shiprocket_client
+        assert shiprocket_client.is_configured() is True
+
+
+# ---------- Structured address acceptance ----------
+class TestStructuredAddress:
+    def test_create_order_with_address_struct(self, api, mongo):
+        payload = {
+            "customer_name": "TEST_StructAddr",
+            "customer_email": "TEST_struct@example.com",
+            "customer_contact": "+919000011111",
+            "shipping_address": "1 Lux Road\nMumbai, MH 400001\nIndia",
+            "address_struct": {
+                "line1": "1 Lux Road",
+                "line2": "Apt 4",
+                "city": "Mumbai",
+                "state": "MH",
+                "postal_code": "400001",
+                "country": "India",
+            },
+            "items": [{"slug": "oura", "quantity": 1}],
+        }
+        r = api.post(f"{BASE_URL}/api/checkout/order", json=payload)
+        assert r.status_code == 200, r.text
+        oid = r.json()["order_id"]
+        txn = mongo.payment_transactions.find_one({"order_id": oid})
+        # Confirm address_struct persisted
+        assert txn.get("address_struct") is not None
+        assert txn["address_struct"]["city"] == "Mumbai"
+        assert txn["address_struct"]["postal_code"] == "400001"
+
+    def test_create_order_without_address_struct_still_works(self, api):
+        # Backwards compat: omitting address_struct should still succeed
+        r = api.post(f"{BASE_URL}/api/checkout/order", json={
+            "customer_name": "TEST_NoStruct",
+            "customer_email": "TEST_nostruct@example.com",
+            "shipping_address": "addr",
+            "items": [{"slug": "oura", "quantity": 1}],
+        })
+        assert r.status_code == 200, r.text
+
+
+# ---------- Lookup shipping_status mapping ----------
+import uuid as _uuid
+from datetime import datetime as _dt, timezone as _tz
+
+
+class TestLookupShippingStatus:
+    def _insert_paid_order(self, mongo, **overrides):
+        order_id = f"MSR-TST{_uuid.uuid4().hex[:5].upper()}"
+        email = "track_test@example.com"
+        doc = {
+            "order_id": order_id,
+            "customer_name": "TEST_Track",
+            "customer_email": email,
+            "customer_contact": "+910000000000",
+            "shipping_address": "Test address",
+            "items": [{"slug": "oura", "name": "Oura", "quantity": 1, "unit_price": 100.0}],
+            "total": 100.0,
+            "currency": "USD",
+            "status": "paid",
+            "created_at": _dt.now(_tz.utc).isoformat(),
+        }
+        doc.update(overrides)
+        mongo.orders.insert_one(doc)
+        return order_id, email
+
+    def test_lookup_fulfillment_pending_when_shiprocket_error(self, api, mongo):
+        # Uses existing seed MSR-E0312109 with shiprocket_error=403
+        r = api.post(f"{BASE_URL}/api/orders/lookup", json={
+            "order_id": "MSR-E0312109",
+            "email": "mossero.in@gmail.com",
+        })
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert d["payment_status"] == "paid"
+        assert d["shipping_status"] == "fulfillment_pending"
+        assert d.get("awb_number") in (None, "")
+
+    def test_lookup_preparing_when_paid_no_shiprocket(self, api):
+        # Seed MSR-B71D46B3 is paid without shiprocket attempt
+        r = api.post(f"{BASE_URL}/api/orders/lookup", json={
+            "order_id": "MSR-B71D46B3",
+            "email": "mossero.in@gmail.com",
+        })
+        assert r.status_code == 200
+        d = r.json()
+        assert d["payment_status"] == "paid"
+        assert d["shipping_status"] == "preparing"
+
+    def test_lookup_in_transit(self, api, mongo):
+        oid, email = self._insert_paid_order(
+            mongo,
+            awb_number="AWBINTRANSIT01",
+            courier_name="Bluedart",
+            tracking={
+                "current_status": "In Transit",
+                "current_location": "Mumbai Hub",
+                "estimated_delivery": "2026-02-12",
+                "courier_name": "Bluedart",
+                "tracking_url": "https://example.com/track/AWB1",
+            },
+            tracking_cached_at=_dt.now(_tz.utc).isoformat(),
+        )
+        r = api.post(f"{BASE_URL}/api/orders/lookup", json={"order_id": oid, "email": email})
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert d["shipping_status"] == "in_transit"
+        assert d["awb_number"] == "AWBINTRANSIT01"
+        assert d["courier_name"] == "Bluedart"
+        assert d["tracking_url"] == "https://example.com/track/AWB1"
+        assert d["tracking"]["current_status"] == "In Transit"
+
+    def test_lookup_delivered(self, api, mongo):
+        oid, email = self._insert_paid_order(
+            mongo,
+            awb_number="AWBDELIVERED01",
+            courier_name="Delhivery",
+            tracking={
+                "current_status": "Delivered",
+                "current_location": "Customer",
+                "estimated_delivery": "2026-01-10",
+                "courier_name": "Delhivery",
+                "tracking_url": "https://example.com/track/D1",
+            },
+            tracking_cached_at=_dt.now(_tz.utc).isoformat(),
+        )
+        r = api.post(f"{BASE_URL}/api/orders/lookup", json={"order_id": oid, "email": email})
+        assert r.status_code == 200
+        assert r.json()["shipping_status"] == "delivered"
+
+    def test_lookup_out_for_delivery(self, api, mongo):
+        oid, email = self._insert_paid_order(
+            mongo,
+            awb_number="AWBOFD01",
+            courier_name="Bluedart",
+            tracking={
+                "current_status": "Out For Delivery",
+                "courier_name": "Bluedart",
+                "tracking_url": "https://example.com/track/O1",
+            },
+            tracking_cached_at=_dt.now(_tz.utc).isoformat(),
+        )
+        r = api.post(f"{BASE_URL}/api/orders/lookup", json={"order_id": oid, "email": email})
+        assert r.status_code == 200
+        assert r.json()["shipping_status"] == "out_for_delivery"
+
+    def test_lookup_dispatched(self, api, mongo):
+        oid, email = self._insert_paid_order(
+            mongo,
+            awb_number="AWBDISP01",
+            courier_name="Xpressbees",
+            tracking={
+                "current_status": "Picked Up",
+                "courier_name": "Xpressbees",
+                "tracking_url": "https://example.com/track/P1",
+            },
+            tracking_cached_at=_dt.now(_tz.utc).isoformat(),
+        )
+        r = api.post(f"{BASE_URL}/api/orders/lookup", json={"order_id": oid, "email": email})
+        assert r.status_code == 200
+        assert r.json()["shipping_status"] == "dispatched"
+
+    def test_lookup_cache_freshness_keeps_cached(self, api, mongo):
+        """When tracking_cached_at is fresh (<30min), live call should NOT overwrite cached values."""
+        oid, email = self._insert_paid_order(
+            mongo,
+            awb_number="AWBCACHED01",
+            courier_name="Bluedart",
+            tracking={
+                "current_status": "In Transit",
+                "current_location": "Cached Hub",
+                "courier_name": "Bluedart",
+                "tracking_url": "https://example.com/track/cached",
+            },
+            tracking_cached_at=_dt.now(_tz.utc).isoformat(),
+        )
+        r = api.post(f"{BASE_URL}/api/orders/lookup", json={"order_id": oid, "email": email})
+        assert r.status_code == 200
+        # Cached values should still be returned since fresh
+        assert r.json()["tracking"]["current_location"] == "Cached Hub"
