@@ -19,21 +19,22 @@ User choices: React/FastAPI replica, functional cart with **Razorpay LIVE** chec
 - **Theme**: cream `#F5F0E8`, gold `#C4A258`, charcoal `#2B2725`, sharp corners only.
 
 ## Implemented (2026-02-06)
-- 6 pages + cart success/error states
+- 6 pages + cart success/error states + **Order Tracking page** (`/track`)
 - Sticky centered-logo nav with live cart badge; sharp-corner gold/black CTAs; fade-in animations
 - **Resend LIVE**: `hello@mossero.in` → `mossero.in@gmail.com` (delivery confirmed)
 - **Razorpay LIVE** (`rzp_live_SoukX8sERjIS3Z`): real orders, real signature verification, idempotent finalization, webhook handler
-- Tests: backend 15/15 (iter 3), full frontend e2e + error states passing
+- **Order confirmation emails** sent automatically on paid event (customer copy + maison notification) — idempotent
+- **Order tracking** via `POST /api/orders/lookup` with order_id + email — no enumeration leak (same 404 for wrong email and unknown order), case-insensitive
+- Tests: backend 22/22 (iter 4), frontend e2e + tracking flows passing
 
 ## P1 / P2 Backlog
 - **P1**: Set `RAZORPAY_WEBHOOK_SECRET` and register webhook in Razorpay dashboard → `https://moss-refined.preview.emergentagent.com/api/webhook/razorpay`
 - **P1**: Replace placeholder Unsplash imagery with original MOSSERO product photography
 - **P1**: Rotate Razorpay keys (they were transmitted via chat)
-- **P2**: Order confirmation email via Resend on `payment_status=paid`
+- **P2**: Despatch tracking integration (e.g., Shiprocket/Delhivery API) so /track shows real courier status
 - **P2**: Newsletter / waitlist capture on Fragrances page
 - **P2**: Admin/CMS for editing copy & product imagery
 - **P2**: Multilingual (EN/FR) toggle
-- **P2**: Currency selector (INR/USD) — Razorpay supports both if enabled on merchant account
 
 ## Personas
 - **Discerning consumer**: browses bottles, reads notes, completes Razorpay-secured checkout.
