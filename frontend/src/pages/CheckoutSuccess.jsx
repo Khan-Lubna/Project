@@ -8,6 +8,8 @@ export default function CheckoutSuccess() {
   const [searchParams] = useSearchParams();
   const orderId = searchParams.get("order_id");
   const verifyFlag = searchParams.get("verify");
+  const mode = searchParams.get("mode");
+  const isConcierge = mode === "concierge";
   const [state, setState] = useState({
     loading: true,
     payment_status: null,
@@ -56,8 +58,48 @@ export default function CheckoutSuccess() {
           Confirming
         </p>
         <h1 className="font-serif text-4xl lg:text-6xl text-ink leading-tight">
-          Loading your order…
+          {isConcierge ? "Reserving your fragrance…" : "Loading your order…"}
         </h1>
+      </div>
+    );
+  }
+
+  if (isConcierge && orderId && !state.error) {
+    return (
+      <div
+        data-testid="order-confirmation-concierge"
+        className="bg-cream pt-40 pb-40 px-6 text-center"
+      >
+        <p className="text-[11px] uppercase tracking-mega text-gold mb-8">
+          Reservation Received
+        </p>
+        <h1 className="font-serif text-5xl lg:text-7xl text-ink leading-tight mb-8">
+          Thank you.
+        </h1>
+        <hr className="gold-divider-short mb-10 mx-auto" />
+        <p className="text-base text-ink/70 font-light max-w-xl mx-auto leading-[1.9] mb-6">
+          Your reservation has been received. The maison will write to you
+          within one working day with payment and despatch arrangements. A
+          confirmation email has been sent.
+        </p>
+        <p
+          className="text-sm tracking-luxe text-ink mb-12"
+          data-testid="order-id"
+        >
+          Reservation #{orderId}
+        </p>
+        <div className="flex flex-col sm:flex-row gap-4 justify-center">
+          <Link
+            to={`/track?order_id=${encodeURIComponent(orderId)}`}
+            className="btn-outline-gold"
+            data-testid="success-track-link"
+          >
+            View Reservation
+          </Link>
+          <Link to="/fragrances" className="btn-outline-gold">
+            Return to the Collection
+          </Link>
+        </div>
       </div>
     );
   }

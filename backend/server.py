@@ -171,6 +171,16 @@ class OrderLookupRequest(BaseModel):
     email: EmailStr
 
 
+class ConciergeOrderRequest(BaseModel):
+    customer_name: str
+    customer_email: EmailStr
+    customer_contact: Optional[str] = None
+    shipping_address: str
+    address_struct: Optional[StructuredAddress] = None
+    items: List[CartItem]
+    notes: Optional[str] = ""
+
+
 # ---------------- Routes ----------------
 @api_router.get("/")
 async def root():
@@ -285,6 +295,125 @@ async def _send_order_emails(order_doc: dict) -> tuple[bool, Optional[str]]:
         return True, None
     except Exception as e:
         logger.error(f"Order confirmation email failed: {e}")
+        return False, str(e)
+
+
+async def _send_concierge_emails(order_doc: dict) -> tuple[bool, Optional[str]]:
+    """Send reservation confirmation to customer + alert to maison (no payment yet)."""
+    if not RESEND_API_KEY:
+        return False, "RESEND_API_KEY not configured"
+
+    item_rows = "".join(
+        f"""<tr>
+            <td style=\"padding:14px 0;border-bottom:1px solid #E5DCC9;color:#1A1A1A;font-family:Georgia,serif;font-size:16px;\">
+              <strong style=\"letter-spacing:0.18em;\">{it['name']}</strong>
+              <div style=\"font-size:11px;letter-spacing:0.2em;text-transform:uppercase;color:#6b6357;margin-top:4px;\">50ml · Eau de Parfum</div>
+            </td>
+            <td style=\"padding:14px 0;border-bottom:1px solid #E5DCC9;text-align:center;color:#1A1A1A;font-family:Arial,sans-serif;font-size:14px;\">× {it['quantity']}</td>
+            <td style=\"padding:14px 0;border-bottom:1px solid #E5DCC9;text-align:right;color:#1A1A1A;font-family:Georgia,serif;font-size:16px;\">{_format_currency(it['line_total'], order_doc['currency'])}</td>
+        </tr>"""
+        for it in order_doc.get("items", [])
+    )
+
+    customer_html = f"""
+    <table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#F5F0E8;padding:40px 16px;font-family:Arial,sans-serif;\">
+      <tr><td align=\"center\">
+        <table width=\"560\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#FBF7F2;border:1px solid #C4A258;\">
+          <tr><td style=\"padding:48px 40px 32px 40px;text-align:center;\">
+            <h1 style=\"margin:0;font-family:Georgia,serif;font-weight:bold;color:#000000;letter-spacing:0.35em;font-size:24px;\">MOSSERO</h1>
+            <p style=\"margin:24px 0 0 0;font-size:10px;letter-spacing:0.3em;text-transform:uppercase;color:#C4A258;\">Reservation Received</p>
+            <hr style=\"border:none;border-top:1px solid #C4A258;width:48px;margin:24px auto 0 auto;\"/>
+          </td></tr>
+          <tr><td style=\"padding:0 40px 24px 40px;\">
+            <p style=\"color:#1A1A1A;font-family:Arial,sans-serif;font-size:14px;line-height:1.9;\">
+              Dear {order_doc['customer_name']},<br/><br/>
+              Thank you for your reservation. The Maison Mossero will write to you within one working day with payment details and despatch arrangements. We do not run an automated checkout — every order is finalised personally.
+            </p>
+          </td></tr>
+          <tr><td style=\"padding:0 40px;\">
+            <table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\">{item_rows}
+              <tr>
+                <td colspan=\"2\" style=\"padding:18px 0 0 0;text-align:right;font-family:Arial,sans-serif;font-size:11px;letter-spacing:0.25em;text-transform:uppercase;color:#1A1A1A;\">Subtotal</td>
+                <td style=\"padding:18px 0 0 0;text-align:right;font-family:Georgia,serif;font-size:20px;color:#1A1A1A;\">{_format_currency(order_doc['total'], order_doc['currency'])}</td>
+              </tr>
+            </table>
+          </td></tr>
+          <tr><td style=\"padding:32px 40px;\">
+            <p style=\"margin:0 0 6px 0;font-size:10px;letter-spacing:0.25em;text-transform:uppercase;color:#1A1A1A;\">Reservation Reference</p>
+            <p style=\"margin:0 0 16px 0;font-family:Georgia,serif;font-size:18px;color:#1A1A1A;letter-spacing:0.1em;\">{order_doc['order_id']}</p>
+            <p style=\"margin:0 0 6px 0;font-size:10px;letter-spacing:0.25em;text-transform:uppercase;color:#1A1A1A;\">Shipping to</p>
+            <p style=\"margin:0;font-size:14px;color:#1A1A1A;line-height:1.8;white-space:pre-line;\">{order_doc['shipping_address']}</p>
+          </td></tr>
+          <tr><td style=\"padding:32px 40px;background:#F5F0E8;text-align:center;\">
+            <p style=\"margin:0;font-size:10px;letter-spacing:0.25em;text-transform:uppercase;color:#6b6357;\">Leave a trace of elegance wherever you go.</p>
+            <p style=\"margin:16px 0 0 0;font-size:11px;color:#9b9285;\">Maison Mossero · www.mossero.in · mossero.in@gmail.com</p>
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+    """
+
+    notes_block = (
+        f"<p style=\"margin:16px 0 0 0;font-size:13px;color:#1A1A1A;background:#F5F0E8;padding:14px;border-left:2px solid #C4A258;white-space:pre-line;\"><strong>Customer note:</strong><br/>{order_doc.get('notes','')}</p>"
+        if order_doc.get("notes")
+        else ""
+    )
+    maison_html = f"""
+    <table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#F5F0E8;padding:40px 16px;font-family:Arial,sans-serif;\">
+      <tr><td align=\"center\">
+        <table width=\"600\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#FBF7F2;border:1px solid #C4A258;\">
+          <tr><td style=\"padding:40px 40px 24px 40px;\">
+            <h1 style=\"margin:0;font-family:Georgia,serif;font-weight:bold;color:#000000;letter-spacing:0.35em;font-size:22px;\">MOSSERO · CONCIERGE QUEUE</h1>
+            <p style=\"margin:18px 0 0 0;font-size:11px;letter-spacing:0.25em;text-transform:uppercase;color:#C4A258;\">New reservation to invoice</p>
+          </td></tr>
+          <tr><td style=\"padding:0 40px 24px 40px;\">
+            <p style=\"margin:0 0 8px 0;font-size:11px;letter-spacing:0.2em;text-transform:uppercase;color:#6b6357;\">Customer</p>
+            <p style=\"margin:0 0 4px 0;font-size:16px;color:#1A1A1A;\"><strong>{order_doc['customer_name']}</strong></p>
+            <p style=\"margin:0 0 4px 0;font-size:14px;color:#1A1A1A;\">{order_doc['customer_email']}</p>
+            <p style=\"margin:0 0 16px 0;font-size:14px;color:#1A1A1A;\">{order_doc.get('customer_contact') or '—'}</p>
+            <p style=\"margin:0 0 8px 0;font-size:11px;letter-spacing:0.2em;text-transform:uppercase;color:#6b6357;\">Ship to</p>
+            <p style=\"margin:0;font-size:14px;color:#1A1A1A;line-height:1.8;white-space:pre-line;\">{order_doc['shipping_address']}</p>
+            {notes_block}
+          </td></tr>
+          <tr><td style=\"padding:0 40px 24px 40px;\">
+            <table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\">{item_rows}
+              <tr>
+                <td colspan=\"2\" style=\"padding:18px 0 0 0;text-align:right;font-family:Arial,sans-serif;font-size:11px;letter-spacing:0.25em;text-transform:uppercase;color:#1A1A1A;\">Total to invoice</td>
+                <td style=\"padding:18px 0 0 0;text-align:right;font-family:Georgia,serif;font-size:22px;color:#1A1A1A;\">{_format_currency(order_doc['total'], order_doc['currency'])}</td>
+              </tr>
+            </table>
+          </td></tr>
+          <tr><td style=\"padding:24px 40px 40px 40px;\">
+            <p style=\"margin:0;font-size:11px;letter-spacing:0.2em;text-transform:uppercase;color:#6b6357;\">Reference {order_doc['order_id']}</p>
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+    """
+
+    try:
+        await asyncio.to_thread(
+            resend.Emails.send,
+            {
+                "from": SENDER_EMAIL,
+                "to": [order_doc["customer_email"]],
+                "subject": f"[MOSSERO] Reservation received — {order_doc['order_id']}",
+                "html": customer_html,
+            },
+        )
+        await asyncio.to_thread(
+            resend.Emails.send,
+            {
+                "from": SENDER_EMAIL,
+                "to": [CONTACT_RECIPIENT_EMAIL],
+                "reply_to": order_doc["customer_email"],
+                "subject": f"[MOSSERO Concierge] {order_doc['order_id']} — {order_doc['customer_name']}",
+                "html": maison_html,
+            },
+        )
+        return True, None
+    except Exception as e:
+        logger.error(f"Concierge email failed: {e}")
         return False, str(e)
 
 
@@ -428,6 +557,82 @@ async def create_order(req: OrderCreateRequest):
         customer_email=req.customer_email,
         customer_contact=req.customer_contact,
     )
+
+
+@api_router.post("/checkout/concierge")
+async def concierge_checkout(req: ConciergeOrderRequest):
+    """Soft checkout — no payment processor. Records the reservation and
+    emails both the maison and the customer. The maison invoices manually."""
+    by_slug = {p["slug"]: p for p in PRODUCTS}
+    total = 0.0
+    currency = "USD"
+    detailed_items = []
+    for item in req.items:
+        p = by_slug.get(item.slug)
+        if not p:
+            raise HTTPException(status_code=400, detail=f"Unknown product: {item.slug}")
+        line_total = p["price"] * item.quantity
+        total += line_total
+        currency = p["currency"]
+        detailed_items.append({
+            "slug": item.slug,
+            "name": p["name"],
+            "unit_price": p["price"],
+            "quantity": item.quantity,
+            "line_total": line_total,
+        })
+    if total <= 0:
+        raise HTTPException(status_code=400, detail="Cart is empty")
+
+    total = round(total, 2)
+    order_id = f"MSR-{uuid.uuid4().hex[:8].upper()}"
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    order_doc = {
+        "order_id": order_id,
+        "rzp_order_id": None,
+        "rzp_payment_id": None,
+        "customer_name": req.customer_name,
+        "customer_email": req.customer_email,
+        "customer_contact": req.customer_contact,
+        "shipping_address": req.shipping_address,
+        "address_struct": req.address_struct.model_dump() if req.address_struct else None,
+        "items": detailed_items,
+        "total": total,
+        "currency": currency,
+        "status": "concierge_pending",
+        "channel": "concierge",
+        "notes": req.notes or "",
+        "confirmation_email_sent": False,
+        "confirmation_email_error": None,
+        "shiprocket_order_id": None,
+        "shiprocket_shipment_id": None,
+        "awb_number": None,
+        "courier_name": None,
+        "shiprocket_error": None,
+        "tracking_cached_at": None,
+        "tracking": None,
+        "created_at": now_iso,
+    }
+    await db.orders.insert_one(order_doc)
+
+    sent, error = await _send_concierge_emails(order_doc)
+    await db.orders.update_one(
+        {"order_id": order_id},
+        {"$set": {
+            "confirmation_email_sent": sent,
+            "confirmation_email_error": error,
+        }},
+    )
+
+    return {
+        "order_id": order_id,
+        "status": "concierge_pending",
+        "total": total,
+        "currency": currency,
+        "email_sent": sent,
+        "message": "Reservation received. The maison will contact you shortly with payment details.",
+    }
 
 
 @api_router.post("/checkout/verify")
@@ -582,7 +787,14 @@ async def lookup_order(req: OrderLookupRequest):
     courier_name = None
     awb_number = None
     tracking_url = None
-    shipping_status = "preparing" if payment_status == "paid" else "awaiting_payment"
+
+    is_concierge = bool(order and order.get("channel") == "concierge")
+    if is_concierge:
+        shipping_status = "concierge_pending"
+    elif payment_status == "paid":
+        shipping_status = "preparing"
+    else:
+        shipping_status = "awaiting_payment"
 
     if order and order.get("awb_number"):
         awb_number = order["awb_number"]

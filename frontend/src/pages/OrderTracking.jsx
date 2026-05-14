@@ -16,6 +16,10 @@ const STATUS_COPY = {
   dispatched: { label: "Dispatched", next: "Your fragrance has left the atelier and is on its way." },
   in_transit: { label: "In Transit", next: "Your order is travelling to you." },
   out_for_delivery: { label: "Out for Delivery", next: "Your fragrance is with the courier and arrives today." },
+  concierge_pending: {
+    label: "Reservation Pending",
+    next: "The maison will contact you within one working day with payment and despatch details.",
+  },
   delivered: { label: "Delivered", next: "Your fragrance has arrived. We hope you love it." },
 };
 

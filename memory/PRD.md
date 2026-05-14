@@ -19,20 +19,21 @@ User choices: React/FastAPI replica, functional cart with **Razorpay LIVE** chec
 - **Theme**: cream `#F5F0E8`, gold `#C4A258`, charcoal `#2B2725`, sharp corners only.
 
 ## Implemented (2026-02-06)
-- 6 pages + cart success/error states + **Order Tracking** (`/track`) with live Shiprocket data
+- 6 pages + cart success/error states + **Order Tracking** (`/track`) with Shiprocket integration scaffolding
 - Sticky centered-logo nav with live cart badge; sharp-corner gold/black CTAs; fade-in animations
 - **Resend LIVE**: `hello@mossero.in` → `mossero.in@gmail.com` (delivery confirmed)
-- **Razorpay LIVE** (`rzp_live_SoukX8sERjIS3Z`): real orders, real signature verification, idempotent finalization, webhook handler with `RAZORPAY_WEBHOOK_SECRET` verification
-- **Order confirmation emails** sent on paid event (customer + maison) — idempotent
-- **Order tracking** via `POST /api/orders/lookup` (order_id + email, no enumeration leak, case-insensitive)
-- **Shiprocket integration**: JWT login + 9-day cache + 401 auto-refresh, best-effort adhoc order creation on paid event, 30-min tracking cache. Status mapping → `awaiting_payment | preparing | fulfillment_pending | dispatched | in_transit | out_for_delivery | delivered`. Graceful UX when account-level permissions deny order creation.
-- **Structured address** on checkout: `line1`, `line2`, `city`, `state`, `postal_code`, `country`
-- Tests: backend 33/33 (iter 5). Two HIGH-priority frontend bugs found and fixed (Cart undefined `form.shipping_address`; OrderTracking `.toFixed` on missing field).
+- **Soft Concierge Checkout (active)**: `POST /api/checkout/concierge` accepts reservations, persists to `orders` collection with `status=concierge_pending`, and dispatches branded reservation emails to both customer (confirmation) and maison (alert with order details + optional customer note). No payment is taken.
+- **Razorpay LIVE wiring** is intact but **NOT exposed in UI** while user changes bank accounts. Backend endpoints `/api/checkout/order` and `/api/checkout/verify` still functional — frontend can be flipped back by reverting `Cart.jsx` to the Razorpay flow.
+- **Shiprocket** wired with email/password JWT auth + caching, but PAUSED pending account-level permission resolution (KYC + pickup location setup on Shiprocket dashboard side).
+- **Order confirmation emails** (paid path) preserved for when Razorpay is re-enabled.
+- **Order tracking** via `POST /api/orders/lookup` (order_id + email, no enumeration leak) — handles paid, concierge_pending, in_transit, delivered, etc.
+- Tests: backend 33/33 (iter 5). Two HIGH-priority frontend bugs found and fixed during iter 5.
 
-## P1 / P2 Backlog
-- **P1 (action required by user)**: Resolve Shiprocket 403 — in Shiprocket dashboard verify (a) pickup location named `Primary` exists (or update `SHIPROCKET_PICKUP_LOCATION` in `.env`), (b) API user has "Create Orders" permission, (c) KYC is complete.
-- **P1**: Replace placeholder Unsplash imagery with original MOSSERO product photography.
+## P1 / P2 Backlog (when user resumes)
+- **P1 (user)**: Finish bank change, then in `Cart.jsx` swap concierge POST back to Razorpay flow (single function change) + re-test.
+- **P1 (user)**: Complete Shiprocket KYC + create pickup location (`SHIPROCKET_PICKUP_LOCATION` in `.env` is currently `HOME`).
 - **P1**: Rotate Razorpay key + Shiprocket password (both shared via chat).
+- **P1**: Replace placeholder Unsplash imagery with original MOSSERO product photography.
 - **P2**: Newsletter / waitlist capture on Fragrances page.
 - **P2**: Admin/CMS for editing copy & product imagery.
 - **P2**: Multilingual (EN/FR) toggle.

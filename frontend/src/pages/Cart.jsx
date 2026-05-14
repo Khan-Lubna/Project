@@ -4,7 +4,6 @@ import axios from "axios";
 import { Trash2, Minus, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useCart } from "../context/CartContext";
-import { loadRazorpay } from "../lib/razorpay";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -23,11 +22,12 @@ export default function Cart() {
     state: "",
     postal_code: "",
     country: "India",
+    notes: "",
   });
 
   const update = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
-  const startCheckout = async (e) => {
+  const reserve = async (e) => {
     e.preventDefault();
     const required = [
       "customer_name",
@@ -44,8 +44,6 @@ export default function Cart() {
     }
     setSubmitting(true);
     try {
-      const Razorpay = await loadRazorpay();
-
       const shipping_address = [
         form.address_line1,
         form.address_line2,
@@ -55,10 +53,10 @@ export default function Cart() {
         .filter(Boolean)
         .join("\n");
 
-      const res = await axios.post(`${API}/checkout/order`, {
+      const res = await axios.post(`${API}/checkout/concierge`, {
         customer_name: form.customer_name,
         customer_email: form.customer_email,
-        customer_contact: form.customer_contact || null,
+        customer_contact: form.customer_contact,
         shipping_address,
         address_struct: {
           line1: form.address_line1,
@@ -68,76 +66,20 @@ export default function Cart() {
           postal_code: form.postal_code,
           country: form.country || "India",
         },
+        notes: form.notes,
         items: items.map((i) => ({ slug: i.slug, quantity: i.quantity })),
       });
 
-      const {
-        order_id,
-        rzp_order_id,
-        rzp_key_id,
-        amount,
-        currency,
-      } = res.data;
-
-      const options = {
-        key: rzp_key_id,
-        amount,
-        currency,
-        order_id: rzp_order_id,
-        name: "MOSSERO",
-        description: items
-          .map((i) => `${i.name} × ${i.quantity}`)
-          .join(", "),
-        image:
-          "https://images.unsplash.com/photo-1774682060959-efe13b7a12b9?crop=entropy&cs=srgb&fm=jpg&q=85&w=200",
-        prefill: {
-          name: form.customer_name,
-          email: form.customer_email,
-          contact: form.customer_contact || "",
-        },
-        notes: { order_id, shipping: shipping_address.slice(0, 200) },
-        theme: { color: "#C4A258" },
-        handler: async (rzpResponse) => {
-          try {
-            await axios.post(`${API}/checkout/verify`, {
-              order_id,
-              razorpay_order_id: rzpResponse.razorpay_order_id,
-              razorpay_payment_id: rzpResponse.razorpay_payment_id,
-              razorpay_signature: rzpResponse.razorpay_signature,
-            });
-            clear();
-            navigate(`/cart/success?order_id=${encodeURIComponent(order_id)}`);
-          } catch (err) {
-            toast.error("Payment verification failed", {
-              description:
-                err?.response?.data?.detail ||
-                "Please contact us if you have been charged.",
-            });
-            navigate(`/cart/success?order_id=${encodeURIComponent(order_id)}&verify=failed`);
-          }
-        },
-        modal: {
-          ondismiss: () => {
-            setSubmitting(false);
-            toast.message("Payment cancelled", {
-              description: "Your cart is preserved. You may resume any time.",
-            });
-          },
-        },
-      };
-
-      const rzp = new Razorpay(options);
-      rzp.on("payment.failed", (resp) => {
-        toast.error("Payment failed", {
-          description:
-            resp?.error?.description || "Please try a different method.",
-        });
-        setSubmitting(false);
-      });
-      rzp.open();
+      clear();
+      navigate(
+        `/cart/success?order_id=${encodeURIComponent(res.data.order_id)}&mode=concierge`
+      );
     } catch (err) {
-      toast.error("Checkout failed", {
-        description: err?.response?.data?.detail || err.message || "Please try again.",
+      toast.error("Reservation failed", {
+        description:
+          err?.response?.data?.detail ||
+          err.message ||
+          "Please try again or write to mossero.in@gmail.com.",
       });
       setSubmitting(false);
     }
@@ -258,10 +200,11 @@ export default function Cart() {
                   onClick={() => setCheckoutOpen(true)}
                   className="btn-gold w-full mt-8"
                 >
-                  Proceed to Checkout
+                  Reserve by Concierge
                 </button>
-                <p className="text-[10px] uppercase tracking-luxe text-ink/50 mt-6 text-center">
-                  Secured by Razorpay
+                <p className="text-[10px] uppercase tracking-luxe text-ink/55 mt-6 text-center leading-[1.8]">
+                  Personally handled.<br />
+                  Payment arranged after reservation.
                 </p>
               </div>
             </aside>
@@ -276,15 +219,18 @@ export default function Cart() {
           >
             <form
               onClick={(e) => e.stopPropagation()}
-              onSubmit={startCheckout}
+              onSubmit={reserve}
               className="bg-cream max-w-xl w-full p-10 lg:p-14 max-h-[90vh] overflow-y-auto"
             >
               <p className="text-[11px] uppercase tracking-mega text-gold mb-6 text-center">
-                Checkout
+                Concierge Reservation
               </p>
-              <h2 className="font-serif text-3xl lg:text-4xl text-ink text-center mb-8">
+              <h2 className="font-serif text-3xl lg:text-4xl text-ink text-center mb-6">
                 Your details
               </h2>
+              <p className="text-sm text-ink/70 font-light leading-[1.9] text-center mb-8">
+                The maison will write to you within one working day with payment and despatch arrangements.
+              </p>
               <hr className="gold-divider-short mx-auto mb-10" />
 
               <div className="space-y-8">
@@ -386,11 +332,22 @@ export default function Cart() {
                     />
                   </div>
                 </div>
+                <div>
+                  <label className="luxe-label">Notes for the maison (optional)</label>
+                  <textarea
+                    data-testid="checkout-notes"
+                    className="luxe-input"
+                    rows={3}
+                    value={form.notes}
+                    onChange={update("notes")}
+                    placeholder="Gift wrapping, preferred delivery window, anything else."
+                  />
+                </div>
               </div>
 
               <div className="mt-10 pt-8 border-t border-ink/10 flex justify-between">
                 <span className="text-[11px] uppercase tracking-luxe text-ink">
-                  Total
+                  Reservation Total
                 </span>
                 <span className="font-serif text-xl">
                   ${subtotal.toFixed(2)}
@@ -403,10 +360,10 @@ export default function Cart() {
                 disabled={submitting}
                 className="btn-gold w-full mt-8"
               >
-                {submitting ? "Opening Razorpay…" : "Continue to Payment"}
+                {submitting ? "Sending reservation…" : "Send Reservation"}
               </button>
-              <p className="text-[10px] uppercase tracking-luxe text-ink/50 mt-6 text-center">
-                Secure payment by Razorpay — cards, UPI, netbanking and wallets.
+              <p className="text-[10px] uppercase tracking-luxe text-ink/55 mt-6 text-center leading-[1.8]">
+                No payment is taken now. The maison will reach you within one working day.
               </p>
               <button
                 type="button"
