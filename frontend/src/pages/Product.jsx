@@ -1,10 +1,13 @@
 import { useState } from "react";
 import { useParams, Navigate, Link, useNavigate } from "react-router-dom";
-import { Minus, Plus } from "lucide-react";
+import { Minus, Plus, QrCode } from "lucide-react";
 import { toast } from "sonner";
+import axios from "axios";
 import { PRODUCTS } from "../lib/products";
 import { useCart } from "../context/CartContext";
 import FadeSection from "../components/FadeSection";
+
+const API = `${process.env.REACT_APP_BACKEND_URL}/api`
 
 export default function Product() {
   const { slug } = useParams();
@@ -136,13 +139,28 @@ export default function Product() {
             >
               Add to Cart
             </button>
-            <button
-              data-testid="buy-now-btn"
-              onClick={handleBuyNow}
-              className={isDark ? "btn-outline-light w-full" : "btn-outline-gold w-full"}
-            >
-              Buy Now
-            </button>
+<button
+               data-testid="buy-now-btn"
+               onClick={handleBuyNow}
+               className={isDark ? "btn-outline-light w-full" : "btn-outline-gold w-full"}
+             >
+               Buy Now
+             </button>
+             <button
+               onClick={async () => {
+                 try {
+                   const { data } = await axios.post(`${API}/payment-link`, { slug: product.slug });
+                   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(data.payment_link)}`;
+                   window.open(qrUrl, '_blank');
+                 } catch (err) {
+                   toast.error("Failed to generate QR code");
+                 }
+               }}
+               className={isDark ? "btn-outline-light w-full mt-2" : "btn-outline-gold w-full mt-2"}
+             >
+               <QrCode size={14} className="inline mr-2" />
+               Generate QR for Payment
+             </button>
           </div>
         </div>
       </section>

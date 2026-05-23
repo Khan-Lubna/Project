@@ -68,14 +68,14 @@ class TestProducts:
 
     def test_get_oura(self, api):
         r = api.get(f"{BASE_URL}/api/products/oura")
-        assert r.status_code == 200
+        assert r.status_code == 200, r.text
         d = r.json()
         assert d["slug"] == "oura"
         assert d["price"] == 100.00
 
     def test_get_veloura(self, api):
         r = api.get(f"{BASE_URL}/api/products/veloura")
-        assert r.status_code == 200
+        assert r.status_code == 200, r.text
         assert r.json()["price"] == 100.00
 
     def test_get_invalid_product(self, api):
@@ -168,17 +168,41 @@ class TestCheckoutOrder:
 
 # ---------- Checkout Status ----------
 class TestCheckoutStatus:
-    def test_status_known_order(self, api):
-        order_id = getattr(pytest, "shared_order_id", None)
-        if not order_id:
-            pytest.skip("No shared order_id from prior test")
+    def _make_order(self, api):
+        """Create a fresh initiated order uniquely identified for this test class."""
+        payload = {
+            "customer_name":    "TEST_StatusBuyer",
+            "customer_email":   "TEST_status@example.com",
+            "customer_contact": "+911111111111",
+            "shipping_address": "Status Test Lane",
+            "items": [
+                {"slug": "oura",   "quantity": 1},
+                {"slug": "veloura", "quantity": 1},
+            ],
+        }
+        r = api.post(f"{BASE_URL}/api/checkout/order", json=payload)
+        assert r.status_code == 200, r.text
+        return r.json()["order_id"]
+
+    def test_status_known_initiated(self, api):
+        order_id = self._make_order(api)
         r = api.get(f"{BASE_URL}/api/checkout/status/{order_id}")
-        assert r.status_code == 200
+        assert r.status_code == 200, r.text
         d = r.json()
         assert d["order_id"] == order_id
         assert d["payment_status"] == "initiated"
         assert d["currency"] == "USD"
-        assert d["amount_total"] == 30000
+        assert d["amount_total"] == 20000
+
+    def test_status_known(self, api):
+        order_id = self._make_order(api)
+        r = api.get(f"{BASE_URL}/api/checkout/status/{order_id}")
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert d["order_id"] == order_id
+        assert d["payment_status"] == "initiated"
+        assert d["currency"] == "USD"
+        assert d["amount_total"] == 20000
 
     def test_status_unknown(self, api):
         r = api.get(f"{BASE_URL}/api/checkout/status/MSR-DOESNOTEXIST")
@@ -288,7 +312,6 @@ class TestWebhook:
             "items": [{"slug": "oura", "quantity": 1}],
         })
         assert cr.status_code == 200
-        order_id = cr.json()["order_id"]
         rzp_order_id = cr.json()["rzp_order_id"]
 
         body = {
@@ -327,7 +350,6 @@ class TestWebhook:
         assert txn["status"] == "complete"
         assert txn["rzp_payment_id"] == "pay_webhook_test_001"
         assert txn["webhook_event"] == "payment.captured"
-
 
 
 # ---------- Order Lookup (/api/orders/lookup) ----------

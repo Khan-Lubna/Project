@@ -12,6 +12,8 @@ import Contact from "@/pages/Contact";
 import Cart from "@/pages/Cart";
 import CheckoutSuccess from "@/pages/CheckoutSuccess";
 import OrderTracking from "@/pages/OrderTracking";
+import QRCheckout from "@/pages/QRCheckout";
+import QRPayment from "@/pages/QRPayment";
 
 export default function App() {
   return (
@@ -27,6 +29,8 @@ export default function App() {
             <Route path="/cart" element={<Cart />} />
             <Route path="/cart/success" element={<CheckoutSuccess />} />
             <Route path="/track" element={<OrderTracking />} />
+            <Route path="/qr-checkout" element={<QRCheckout />} />
+            <Route path="/qr-pay" element={<QRPayment />} />
             <Route path="*" element={<Home />} />
           </Route>
         </Routes>
