@@ -33,7 +33,7 @@ export default function QRPayment() {
     if (selectedSlug) {
       void generateQR();
     }
-  }, [selectedSlug]);
+  }, [selectedSlug, generateQR]);
 
   return (
     <div className="min-h-screen bg-cream pt-32 lg:pt-44 pb-32">
