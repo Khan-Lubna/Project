@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import axios from "axios";
 import { toast } from "sonner";
 import FadeSection from "../components/FadeSection";
+import { formatPrice } from "../lib/format";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -268,7 +269,7 @@ export default function OrderTracking() {
                         </p>
                       </div>
                       <p className="font-serif text-lg text-ink">
-                        ${line.toFixed(2)}
+                        {formatPrice(line, order.currency)}
                       </p>
                     </li>
                   );
@@ -283,7 +284,7 @@ export default function OrderTracking() {
                   className="font-serif text-2xl text-ink"
                   data-testid="track-total"
                 >
-                  ${(order.total ?? 0).toFixed(2)} {(order.currency || "USD").toUpperCase()}
+                  {formatPrice(order.total ?? 0, order.currency || "INR")}
                 </span>
               </div>
 

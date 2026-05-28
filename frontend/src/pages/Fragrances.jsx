@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { PRODUCTS } from "../lib/products";
 import FadeSection from "../components/FadeSection";
+import { formatPrice } from "../lib/format";
 
 export default function Fragrances() {
   return (
@@ -43,7 +44,7 @@ export default function Fragrances() {
                 {p.tagline}
               </p>
               <p className="text-sm font-light tracking-wider mb-8">
-                ${p.price.toFixed(2)} USD
+                {formatPrice(p.price, p.currency)}
               </p>
               <span className="text-[11px] uppercase tracking-luxe text-gold link-underline">
                 Discover

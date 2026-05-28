@@ -58,8 +58,8 @@ PRODUCTS = [
         "size": "50ml",
         "target": "For Him",
         "tagline": "Power in every presence.",
-        "price": 100.00,
-        "currency": "USD",
+        "price": 999.00,
+        "currency": "INR",
         "theme": "dark",
         "description": (
             "OURA is a study in restraint and command. A masculine composition "
@@ -82,8 +82,8 @@ PRODUCTS = [
         "size": "50ml",
         "target": "For Her",
         "tagline": "A trace of the eternal feminine.",
-        "price": 100.00,
-        "currency": "USD",
+        "price": 999.00,
+        "currency": "INR",
         "theme": "light",
         "description": (
             "VELOURA is luminous and unhurried. A feminine bouquet built on the soft, "

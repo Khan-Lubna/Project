@@ -7,8 +7,8 @@ export const PRODUCTS = {
     size: "50ml",
     target: "For Him",
     tagline: "Power in every presence.",
-    price: 100.0,
-    currency: "USD",
+    price: 999.0,
+    currency: "INR",
     theme: "dark",
     description:
       "OURA is a study in restraint and command. A masculine composition that opens with the bright cut of bergamot and the spark of fresh pepper, softens through a quiet heart of lavender, geranium and a whispered spice, and settles into the long, low warmth of ambroxan, cedarwood and musk. It is presence — felt before it is named.",
@@ -29,8 +29,8 @@ export const PRODUCTS = {
     size: "50ml",
     target: "For Her",
     tagline: "A trace of the eternal feminine.",
-    price: 100.0,
-    currency: "USD",
+    price: 999.0,
+    currency: "INR",
     theme: "light",
     description:
       "VELOURA is luminous and unhurried. A feminine bouquet built on the soft, narcotic light of jasmine, the velvet weight of tuberose and the rare, honeyed bloom of Rangoon creeper. Romantic without nostalgia. Quiet, enduring, alive.",

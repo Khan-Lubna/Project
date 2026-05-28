@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { PRODUCTS } from "../lib/products";
 import { useCart } from "../context/CartContext";
 import FadeSection from "../components/FadeSection";
+import { formatPrice } from "../lib/format";
 
 export default function Product() {
   const { slug } = useParams();
@@ -99,7 +100,7 @@ export default function Product() {
             <h3 className="font-serif text-3xl lg:text-4xl mb-8 tracking-wider">
               {product.name}
             </h3>
-            <p className="font-serif text-2xl mb-10">${product.price.toFixed(2)} USD</p>
+            <p className="font-serif text-2xl mb-10">{formatPrice(product.price, product.currency)}</p>
 
             <p className="luxe-label" style={{ color: isDark ? "#FBF7F2" : undefined }}>
               Quantity

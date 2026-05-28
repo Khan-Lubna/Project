@@ -4,6 +4,8 @@ import axios from "axios";
 import { Trash2, Minus, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useCart } from "../context/CartContext";
+import { loadRazorpay } from "../lib/razorpay";
+import { formatPrice } from "../lib/format";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -22,12 +24,12 @@ export default function Cart() {
     state: "",
     postal_code: "",
     country: "India",
-    notes: "",
   });
 
+  const currency = items[0]?.currency || "INR";
   const update = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
-  const reserve = async (e) => {
+  const startCheckout = async (e) => {
     e.preventDefault();
     const required = [
       "customer_name",
@@ -44,6 +46,8 @@ export default function Cart() {
     }
     setSubmitting(true);
     try {
+      const Razorpay = await loadRazorpay();
+
       const shipping_address = [
         form.address_line1,
         form.address_line2,
@@ -53,10 +57,10 @@ export default function Cart() {
         .filter(Boolean)
         .join("\n");
 
-      const res = await axios.post(`${API}/checkout/concierge`, {
+      const res = await axios.post(`${API}/checkout/order`, {
         customer_name: form.customer_name,
         customer_email: form.customer_email,
-        customer_contact: form.customer_contact,
+        customer_contact: form.customer_contact || null,
         shipping_address,
         address_struct: {
           line1: form.address_line1,
@@ -66,20 +70,99 @@ export default function Cart() {
           postal_code: form.postal_code,
           country: form.country || "India",
         },
-        notes: form.notes,
         items: items.map((i) => ({ slug: i.slug, quantity: i.quantity })),
       });
 
-      clear();
-      navigate(
-        `/cart/success?order_id=${encodeURIComponent(res.data.order_id)}&mode=concierge`
-      );
+      const {
+        order_id,
+        rzp_order_id,
+        rzp_key_id,
+        amount,
+        currency: orderCurrency,
+      } = res.data;
+
+      const options = {
+        key: rzp_key_id,
+        amount,
+        currency: orderCurrency,
+        order_id: rzp_order_id,
+        name: "MOSSERO",
+        description: items.map((i) => `${i.name} × ${i.quantity}`).join(", "),
+        image:
+          "https://images.unsplash.com/photo-1774682060959-efe13b7a12b9?crop=entropy&cs=srgb&fm=jpg&q=85&w=200",
+        prefill: {
+          name: form.customer_name,
+          email: form.customer_email,
+          contact: form.customer_contact || "",
+          method: "upi",
+        },
+        notes: { order_id, shipping: shipping_address.slice(0, 200) },
+        theme: { color: "#C4A258" },
+        // UPI-only checkout per merchant preference
+        method: {
+          upi: true,
+          card: false,
+          netbanking: false,
+          wallet: false,
+          emi: false,
+          paylater: false,
+        },
+        config: {
+          display: {
+            blocks: {
+              upi_block: {
+                name: "Pay using UPI",
+                instruments: [{ method: "upi" }],
+              },
+            },
+            sequence: ["block.upi_block"],
+            preferences: { show_default_blocks: false },
+          },
+        },
+        handler: async (rzpResponse) => {
+          try {
+            await axios.post(`${API}/checkout/verify`, {
+              order_id,
+              razorpay_order_id: rzpResponse.razorpay_order_id,
+              razorpay_payment_id: rzpResponse.razorpay_payment_id,
+              razorpay_signature: rzpResponse.razorpay_signature,
+            });
+            clear();
+            navigate(`/cart/success?order_id=${encodeURIComponent(order_id)}`);
+          } catch (err) {
+            toast.error("Payment verification failed", {
+              description:
+                err?.response?.data?.detail ||
+                "Please contact us if you have been charged.",
+            });
+            navigate(
+              `/cart/success?order_id=${encodeURIComponent(order_id)}&verify=failed`
+            );
+          }
+        },
+        modal: {
+          ondismiss: () => {
+            setSubmitting(false);
+            toast.message("Payment cancelled", {
+              description: "Your cart is preserved. You may resume any time.",
+            });
+          },
+        },
+      };
+
+      const rzp = new Razorpay(options);
+      rzp.on("payment.failed", (resp) => {
+        toast.error("Payment failed", {
+          description:
+            resp?.error?.description || "Please try a different UPI app.",
+        });
+        setSubmitting(false);
+      });
+      rzp.open();
     } catch (err) {
-      toast.error("Reservation failed", {
+      toast.error("Checkout failed", {
         description:
-          err?.response?.data?.detail ||
-          err.message ||
-          "Please try again or write to mossero.in@gmail.com.",
+          err?.response?.data?.detail || err.message || "Please try again.",
       });
       setSubmitting(false);
     }
@@ -135,7 +218,7 @@ export default function Cart() {
                       {item.name}
                     </h3>
                     <p className="font-serif text-lg text-ink mb-6">
-                      ${item.price.toFixed(2)}
+                      {formatPrice(item.price, item.currency)}
                     </p>
                     <div className="flex items-center justify-between mt-auto">
                       <div className="flex items-center border border-ink/30">
@@ -183,7 +266,7 @@ export default function Cart() {
                 <div className="flex justify-between py-3 text-sm font-light">
                   <span>Subtotal</span>
                   <span data-testid="cart-subtotal">
-                    ${subtotal.toFixed(2)}
+                    {formatPrice(subtotal, currency)}
                   </span>
                 </div>
                 <div className="flex justify-between py-3 text-sm font-light text-ink/60">
@@ -193,18 +276,20 @@ export default function Cart() {
                 <hr className="gold-divider my-6" />
                 <div className="flex justify-between py-3 font-serif text-2xl">
                   <span>Total</span>
-                  <span data-testid="cart-total">${subtotal.toFixed(2)}</span>
+                  <span data-testid="cart-total">
+                    {formatPrice(subtotal, currency)}
+                  </span>
                 </div>
                 <button
                   data-testid="checkout-btn"
                   onClick={() => setCheckoutOpen(true)}
                   className="btn-gold w-full mt-8"
                 >
-                  Reserve by Concierge
+                  Pay with UPI
                 </button>
                 <p className="text-[10px] uppercase tracking-luxe text-ink/55 mt-6 text-center leading-[1.8]">
-                  Personally handled.<br />
-                  Payment arranged after reservation.
+                  Secured by Razorpay<br />
+                  GPay · PhonePe · Paytm · BHIM UPI
                 </p>
               </div>
             </aside>
@@ -219,17 +304,17 @@ export default function Cart() {
           >
             <form
               onClick={(e) => e.stopPropagation()}
-              onSubmit={reserve}
+              onSubmit={startCheckout}
               className="bg-cream max-w-xl w-full p-10 lg:p-14 max-h-[90vh] overflow-y-auto"
             >
               <p className="text-[11px] uppercase tracking-mega text-gold mb-6 text-center">
-                Concierge Reservation
+                Checkout
               </p>
               <h2 className="font-serif text-3xl lg:text-4xl text-ink text-center mb-6">
                 Your details
               </h2>
-              <p className="text-sm text-ink/70 font-light leading-[1.9] text-center mb-8">
-                The maison will write to you within one working day with payment and despatch arrangements.
+              <p className="text-sm text-ink/65 font-light leading-[1.9] text-center mb-8">
+                Payment via UPI on the next step.
               </p>
               <hr className="gold-divider-short mx-auto mb-10" />
 
@@ -256,14 +341,14 @@ export default function Cart() {
                   />
                 </div>
                 <div>
-                  <label className="luxe-label">Phone</label>
+                  <label className="luxe-label">Phone (UPI linked)</label>
                   <input
                     type="tel"
                     data-testid="checkout-contact"
                     className="luxe-input"
                     value={form.customer_contact}
                     onChange={update("customer_contact")}
-                    placeholder="+91…"
+                    placeholder="10-digit mobile"
                     required
                   />
                 </div>
@@ -332,25 +417,14 @@ export default function Cart() {
                     />
                   </div>
                 </div>
-                <div>
-                  <label className="luxe-label">Notes for the maison (optional)</label>
-                  <textarea
-                    data-testid="checkout-notes"
-                    className="luxe-input"
-                    rows={3}
-                    value={form.notes}
-                    onChange={update("notes")}
-                    placeholder="Gift wrapping, preferred delivery window, anything else."
-                  />
-                </div>
               </div>
 
               <div className="mt-10 pt-8 border-t border-ink/10 flex justify-between">
                 <span className="text-[11px] uppercase tracking-luxe text-ink">
-                  Reservation Total
+                  Total
                 </span>
                 <span className="font-serif text-xl">
-                  ${subtotal.toFixed(2)}
+                  {formatPrice(subtotal, currency)}
                 </span>
               </div>
 
@@ -360,10 +434,10 @@ export default function Cart() {
                 disabled={submitting}
                 className="btn-gold w-full mt-8"
               >
-                {submitting ? "Sending reservation…" : "Send Reservation"}
+                {submitting ? "Opening UPI…" : "Continue to UPI Payment"}
               </button>
               <p className="text-[10px] uppercase tracking-luxe text-ink/55 mt-6 text-center leading-[1.8]">
-                No payment is taken now. The maison will reach you within one working day.
+                GPay · PhonePe · Paytm · BHIM UPI — secured by Razorpay.
               </p>
               <button
                 type="button"

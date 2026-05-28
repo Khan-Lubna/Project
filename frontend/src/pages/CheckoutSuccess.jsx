@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import axios from "axios";
+import { formatPrice } from "../lib/format";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -137,10 +138,6 @@ export default function CheckoutSuccess() {
   }
 
   if (state.payment_status === "paid") {
-    const formatted =
-      state.amount_total != null
-        ? (state.amount_total / 100).toFixed(2)
-        : null;
     return (
       <div
         data-testid="order-confirmation"
@@ -160,9 +157,9 @@ export default function CheckoutSuccess() {
         <p className="text-sm tracking-luxe text-ink mb-2" data-testid="order-id">
           Order #{orderId}
         </p>
-        {formatted && (
+        {state.amount_total != null && (
           <p className="font-serif text-2xl text-ink mb-12">
-            Total ${formatted} {state.currency?.toUpperCase()}
+            Total {formatPrice(state.amount_total / 100, state.currency || "INR")}
           </p>
         )}
         <div className="flex flex-col sm:flex-row gap-4 justify-center">
