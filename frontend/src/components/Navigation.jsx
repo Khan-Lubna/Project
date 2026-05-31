@@ -8,7 +8,6 @@ const navLinks = [
   { to: "/fragrances", label: "Fragrances" },
   { to: "/our-story", label: "Our Story" },
   { to: "/contact", label: "Contact" },
-  { to: "/qr-pay", label: "Pay by QR" },
 ];
 
 export default function Navigation() {

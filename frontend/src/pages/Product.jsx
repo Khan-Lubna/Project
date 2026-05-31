@@ -1,13 +1,11 @@
 import { useState } from "react";
 import { useParams, Navigate, Link, useNavigate } from "react-router-dom";
-import { Minus, Plus, QrCode } from "lucide-react";
+import { Minus, Plus } from "lucide-react";
 import { toast } from "sonner";
-import axios from "axios";
 import { PRODUCTS } from "../lib/products";
 import { useCart } from "../context/CartContext";
 import FadeSection from "../components/FadeSection";
-
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`
+import { formatPrice } from "../lib/format";
 
 export default function Product() {
   const { slug } = useParams();
@@ -22,21 +20,21 @@ export default function Product() {
 
   const palette = isDark
     ? {
-        bg: "bg-charcoal",
-        text: "text-offwhite",
-        soft: "text-offwhite/70",
-        border: "border-offwhite/20",
-        cardBg: "bg-charcoal",
-        priceBg: "bg-charcoal",
-      }
+      bg: "bg-charcoal",
+      text: "text-offwhite",
+      soft: "text-offwhite/70",
+      border: "border-offwhite/20",
+      cardBg: "bg-charcoal",
+      priceBg: "bg-charcoal",
+    }
     : {
-        bg: "bg-offwhite",
-        text: "text-ink",
-        soft: "text-ink/70",
-        border: "border-ink/20",
-        cardBg: "bg-offwhite",
-        priceBg: "bg-offwhite",
-      };
+      bg: "bg-offwhite",
+      text: "text-ink",
+      soft: "text-ink/70",
+      border: "border-ink/20",
+      cardBg: "bg-offwhite",
+      priceBg: "bg-offwhite",
+    };
 
   const handleAdd = () => {
     addItem(product, qty);
@@ -66,9 +64,8 @@ export default function Product() {
           </p>
           <h1
             data-testid="product-name"
-            className={`font-serif text-6xl sm:text-7xl lg:text-9xl tracking-wider ${
-              isDark ? "text-offwhite" : "text-ink"
-            }`}
+            className={`font-serif text-6xl sm:text-7xl lg:text-9xl tracking-wider ${isDark ? "text-offwhite" : "text-ink"
+              }`}
           >
             {product.name}
           </h1>
@@ -102,7 +99,7 @@ export default function Product() {
             <h3 className="font-serif text-3xl lg:text-4xl mb-8 tracking-wider">
               {product.name}
             </h3>
-            <p className="font-serif text-2xl mb-10">${product.price.toFixed(2)} USD</p>
+            <p className="font-serif text-2xl mb-10">{formatPrice(product.price, product.currency)}</p>
 
             <p className="luxe-label" style={{ color: isDark ? "#FBF7F2" : undefined }}>
               Quantity
@@ -139,28 +136,13 @@ export default function Product() {
             >
               Add to Cart
             </button>
-<button
-               data-testid="buy-now-btn"
-               onClick={handleBuyNow}
-               className={isDark ? "btn-outline-light w-full" : "btn-outline-gold w-full"}
-             >
-               Buy Now
-             </button>
-             <button
-               onClick={async () => {
-                 try {
-                   const { data } = await axios.post(`${API}/payment-link`, { slug: product.slug });
-                   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(data.payment_link)}`;
-                   window.open(qrUrl, '_blank');
-                 } catch (err) {
-                   toast.error("Failed to generate QR code");
-                 }
-               }}
-               className={isDark ? "btn-outline-light w-full mt-2" : "btn-outline-gold w-full mt-2"}
-             >
-               <QrCode size={14} className="inline mr-2" />
-               Generate QR for Payment
-             </button>
+            <button
+              data-testid="buy-now-btn"
+              onClick={handleBuyNow}
+              className={isDark ? "btn-outline-light w-full" : "btn-outline-gold w-full"}
+            >
+              Buy Now
+            </button>
           </div>
         </div>
       </section>
@@ -186,9 +168,8 @@ export default function Product() {
               <div
                 key={group.label}
                 data-testid={`notes-${group.label.toLowerCase().replace(/\s+/g, "-")}`}
-                className={`px-8 py-16 text-center border ${palette.border} ${
-                  i === 1 ? "md:border-l-0 md:border-r-0" : ""
-                }`}
+                className={`px-8 py-16 text-center border ${palette.border} ${i === 1 ? "md:border-l-0 md:border-r-0" : ""
+                  }`}
               >
                 <p className="text-[10px] uppercase tracking-mega text-gold mb-8">
                   {group.label}
