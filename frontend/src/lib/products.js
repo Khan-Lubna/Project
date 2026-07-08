@@ -1,3 +1,6 @@
+import ouraInstagram from "../assets/images/oura-instagram.jpeg";
+import velouraInstagram from "../assets/images/veloura-instagram.png";
+
 // Static product data — mirrored on backend at /api/products
 export const PRODUCTS = {
   oura: {
@@ -53,10 +56,10 @@ export const STORY_IMAGE =
   "https://images.unsplash.com/photo-1709662217788-6a8a1b31562a?crop=entropy&cs=srgb&fm=jpg&q=85&w=1800";
 
 export const INSTAGRAM_GRID = [
-  "https://images.unsplash.com/photo-1758225502621-9102d2856dc8?crop=entropy&cs=srgb&fm=jpg&q=85&w=900",
+  ouraInstagram,
   "https://images.unsplash.com/photo-1617733401065-c7bdf0b33417?crop=entropy&cs=srgb&fm=jpg&q=85&w=900",
   "https://images.unsplash.com/photo-1676577419866-92359c44c983?crop=entropy&cs=srgb&fm=jpg&q=85&w=900",
   "https://images.unsplash.com/photo-1612303544167-5871c2331e36?crop=entropy&cs=srgb&fm=jpg&q=85&w=900",
   "https://images.unsplash.com/photo-1612301988752-5a5b19021f45?crop=entropy&cs=srgb&fm=jpg&q=85&w=900",
-  "https://images.unsplash.com/photo-1760113559708-84e7a148ec68?crop=entropy&cs=srgb&fm=jpg&q=85&w=900",
+  velouraInstagram,
 ];
