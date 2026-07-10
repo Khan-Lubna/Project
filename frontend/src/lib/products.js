@@ -1,4 +1,5 @@
-import ouraInstagram from "../assets/images/oura-instagram.jpeg";
+import heroImage from "../assets/images/hero-image.png";
+import ouraInstagram from "../assets/images/oura-instagram.png";
 import velouraInstagram from "../assets/images/veloura-instagram.png";
 
 // Static product data — mirrored on backend at /api/products
@@ -20,8 +21,7 @@ export const PRODUCTS = {
       heart: ["Lavender", "Geranium", "Spicy Accord"],
       base: ["Ambroxan", "Cedarwood", "Warm Musk"],
     },
-    image:
-      "https://images.unsplash.com/photo-1736605406021-afd8241d5edd?crop=entropy&cs=srgb&fm=jpg&q=85&w=1800",
+    image: ouraInstagram,
     secondary:
       "https://images.unsplash.com/photo-1709662217788-6a8a1b31562a?crop=entropy&cs=srgb&fm=jpg&q=85&w=1600",
   },
@@ -42,15 +42,13 @@ export const PRODUCTS = {
       heart: ["Tuberose"],
       base: ["Rangoon Creeper"],
     },
-    image:
-      "https://images.unsplash.com/photo-1759793499819-bf60128a54b4?crop=entropy&cs=srgb&fm=jpg&q=85&w=1800",
+    image: velouraInstagram,
     secondary:
       "https://images.unsplash.com/photo-1760113559708-84e7a148ec68?crop=entropy&cs=srgb&fm=jpg&q=85&w=1600",
   },
 };
 
-export const HERO_IMAGE =
-  "https://images.unsplash.com/photo-1774682060959-efe13b7a12b9?crop=entropy&cs=srgb&fm=jpg&q=85&w=2400";
+export const HERO_IMAGE = heroImage;
 
 export const STORY_IMAGE =
   "https://images.unsplash.com/photo-1709662217788-6a8a1b31562a?crop=entropy&cs=srgb&fm=jpg&q=85&w=1800";

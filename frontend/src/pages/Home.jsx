@@ -53,12 +53,19 @@ export default function Home() {
             />
             <div className="absolute inset-0 bg-gradient-to-b from-black/20 via-transparent to-charcoal/80" />
             <div className="absolute inset-x-0 bottom-0 p-10 lg:p-16">
-              <p className="text-[11px] uppercase tracking-luxe text-gold mb-4">For Him</p>
-              <h2 className="font-serif text-5xl lg:text-7xl mb-3 tracking-wider">OURA</h2>
-              <p className="font-serif italic text-xl text-offwhite/80 mb-8">
+              <p className="text-xs uppercase tracking-[0.3em] text-gold font-medium mb-4">
+                For Him
+              </p>
+
+              <h2 className="font-serif text-5xl lg:text-7xl tracking-wider text-white drop-shadow-lg mb-3">
+                OURA
+              </h2>
+
+              <p className="font-serif italic text-xl text-white/95 drop-shadow-md mb-8">
                 Power in every presence.
               </p>
-              <span className="text-[11px] uppercase tracking-luxe text-gold link-underline">
+
+              <span className="text-xs uppercase tracking-[0.3em] text-gold font-semibold link-underline">
                 Shop Now
               </span>
             </div>
@@ -77,16 +84,26 @@ export default function Home() {
               alt="VELOURA"
               className="product-card-img w-full h-full object-cover"
             />
-            <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-offwhite/85" />
-            <div className="absolute inset-x-0 bottom-0 p-10 lg:p-16">
-              <p className="text-[11px] uppercase tracking-luxe text-gold mb-4">For Her</p>
-              <h2 className="font-serif text-5xl lg:text-7xl mb-3 tracking-wider text-ink">
+            <div className="absolute inset-0 bg-gradient-to-t from-black/10 via-transparent to-transparent" />
+            <div className="absolute
+    left-6 bottom-6
+    sm:left-8 sm:bottom-8
+    lg:inset-x-0 lg:bottom-0
+    p-0 lg:p-16
+    max-w-[180px] sm:max-w-xs lg:max-w-none">
+              <p className="text-[10px] sm:text-xs uppercase tracking-[0.3em] text-[#8c6a2f] font-semibold drop-shadow-md mb-2 lg:mb-4">
+                For Her
+              </p>
+
+              <h2 className="font-serif font-bold text-3xl sm:text-5xl lg:text-7xl tracking-wider text-[#1f140d] drop-shadow-[0_2px_8px_rgba(255,255,255,0.65)] mb-2 lg:mb-3">
                 VELOURA
               </h2>
-              <p className="font-serif italic text-xl text-ink/70 mb-8">
+
+              <p className="font-serif italic font-semibold text-sm sm:text-lg lg:text-xl text-[#2d1b12] drop-shadow-[0_2px_6px_rgba(255,255,255,0.65)] mb-4 lg:mb-8">
                 A trace of the eternal feminine.
               </p>
-              <span className="text-[11px] uppercase tracking-luxe text-gold link-underline">
+
+              <span className="text-[10px] sm:text-xs uppercase tracking-[0.3em] text-[#8c6a2f] font-bold link-underline drop-shadow-md">
                 Shop Now
               </span>
             </div>
