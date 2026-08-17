@@ -90,17 +90,49 @@ The API will be available at `http://localhost:8000`.
 
 ```powershell
 cd frontend
-npm install
+yarn install
 ```
 
 ### 5. Start Frontend Dev Server
 
 ```powershell
 cd frontend
-npm start
+yarn start
 ```
 
 The app will open at `http://localhost:3000`.
+
+## Deploying Backend (Render)
+
+Build Command:
+
+```powershell
+pip install -r requirements.txt
+```
+
+Start Command:
+
+```powershell
+python server.py
+```
+
+Ensure these environment variables are set in your Render dashboard:
+
+- `MONGO_URL`
+- `DB_NAME`
+- `CORS_ORIGINS`
+- `RESEND_API_KEY`
+- `SENDER_EMAIL`
+- `CONTACT_RECIPIENT_EMAIL`
+- `RAZORPAY_KEY_ID`
+- `RAZORPAY_KEY_SECRET`
+- `RAZORPAY_WEBHOOK_SECRET`
+- `SHIPROCKET_EMAIL`
+- `SHIPROCKET_PASSWORD`
+- `SHIPROCKET_PICKUP_LOCATION`
+- `SHOPIFY_STORE_URL`
+- `SHOPIFY_ACCESS_TOKEN`
+- `SHOPIFY_API_VERSION`
 
 ## Available Scripts
 
@@ -109,7 +141,7 @@ The app will open at `http://localhost:3000`.
 | `yarn start` | `frontend/` | Start React dev server (CRACO) |
 | `yarn build` | `frontend/` | Build production bundle |
 | `yarn test` | `frontend/` | Run Jest tests |
-| `uvicorn server:app --reload` | `backend/` | Start FastAPI dev server |
+| `python server.py` | `backend/` | Start FastAPI server (also works on Render) |
 | `pytest` | `backend/` | Run backend tests |
 
 ## Notes
