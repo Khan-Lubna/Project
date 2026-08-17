@@ -58,7 +58,7 @@ PRODUCTS = [
         "size": "50ml",
         "target": "For Him",
         "tagline": "Power in every presence.",
-        "price": 999.00,
+        "price": 1149.00,
         "currency": "INR",
         "theme": "dark",
         "description": (
@@ -82,7 +82,7 @@ PRODUCTS = [
         "size": "50ml",
         "target": "For Her",
         "tagline": "A trace of the eternal feminine.",
-        "price": 999.00,
+        "price": 1149.00,
         "currency": "INR",
         "theme": "light",
         "description": (

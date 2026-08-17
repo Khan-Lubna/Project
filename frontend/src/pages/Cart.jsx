@@ -271,7 +271,7 @@ export default function Cart() {
                 </div>
                 <div className="flex justify-between py-3 text-sm font-light text-ink/60">
                   <span>Shipping</span>
-                  <span>Complimentary</span>
+                  <span>Free Shipping</span>
                 </div>
                 <hr className="gold-divider my-6" />
                 <div className="flex justify-between py-3 font-serif text-2xl">
