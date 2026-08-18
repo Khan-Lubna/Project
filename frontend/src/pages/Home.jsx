@@ -164,7 +164,7 @@ export default function Home() {
       <FadeSection className="bg-cream pt-24 pb-32 lg:pt-32 lg:pb-44">
         <div className="text-center mb-16">
           <p className="text-[11px] uppercase tracking-mega text-gold mb-6">
-            Follow @mossero
+            Follow @mossero.in
           </p>
           <h3 className="font-serif text-3xl lg:text-5xl text-ink">
             The world, slowly.

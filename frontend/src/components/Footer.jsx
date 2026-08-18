@@ -71,7 +71,7 @@ export default function Footer() {
             </h4>
             <div className="flex items-center gap-5">
               <a
-                href="https://instagram.com"
+                href="https://www.instagram.com/mossero.in/"
                 target="_blank"
                 rel="noreferrer"
                 data-testid="footer-instagram"
