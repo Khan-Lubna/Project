@@ -3,7 +3,8 @@ import { Link, useSearchParams } from "react-router-dom";
 import axios from "axios";
 import { formatPrice } from "../lib/format";
 
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+// const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+import { API } from "../lib/api";
 
 export default function CheckoutSuccess() {
   const [searchParams] = useSearchParams();

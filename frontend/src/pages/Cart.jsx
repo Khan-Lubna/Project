@@ -6,8 +6,8 @@ import { toast } from "sonner";
 import { useCart } from "../context/CartContext";
 import { loadRazorpay } from "../lib/razorpay";
 import { formatPrice } from "../lib/format";
-
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+// const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+import { API } from "../lib/api";
 
 export default function Cart() {
   const navigate = useNavigate();
@@ -271,7 +271,8 @@ export default function Cart() {
                 </div>
                 <div className="flex justify-between py-3 text-sm font-light text-ink/60">
                   <span>Shipping</span>
-                  <span>Free Shipping</span>
+                  {/* <span>Free Shipping</span> */}
+                  <span>Complimentary</span>
                 </div>
                 <hr className="gold-divider my-6" />
                 <div className="flex justify-between py-3 font-serif text-2xl">
