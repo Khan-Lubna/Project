@@ -3,19 +3,7 @@
 // as a fallback for deployments where frontend and backend share the same origin.
 
 function resolveBase() {
-    if (process.env.REACT_APP_BACKEND_URL) {
-        return process.env.REACT_APP_BACKEND_URL;
-    }
-
-    if (
-        typeof window !== "undefined" &&
-        window.location &&
-        window.location.origin
-    ) {
-        return window.location.origin;
-    }
-
-    return "";
+    return process.env.REACT_APP_BACKEND_URL || "";
 }
 
 export const API_BASE = resolveBase();
