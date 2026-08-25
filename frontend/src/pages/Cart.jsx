@@ -6,8 +6,7 @@ import { toast } from "sonner";
 import { useCart } from "../context/CartContext";
 import { loadRazorpay } from "../lib/razorpay";
 import { formatPrice } from "../lib/format";
-
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+import { API } from "../lib/api";
 
 export default function Cart() {
   const navigate = useNavigate();

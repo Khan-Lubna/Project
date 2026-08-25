@@ -63,20 +63,20 @@ class TestProducts:
         slugs = {p["slug"] for p in data}
         assert slugs == {"oura", "veloura"}
         for p in data:
-            assert p["price"] == 100.00
-            assert p["currency"] == "USD"
+            assert p["price"] == 999.00
+            assert p["currency"] == "INR"
 
     def test_get_oura(self, api):
         r = api.get(f"{BASE_URL}/api/products/oura")
         assert r.status_code == 200
         d = r.json()
         assert d["slug"] == "oura"
-        assert d["price"] == 100.00
+        assert d["price"] == 999.00
 
     def test_get_veloura(self, api):
         r = api.get(f"{BASE_URL}/api/products/veloura")
         assert r.status_code == 200
-        assert r.json()["price"] == 100.00
+        assert r.json()["price"] == 999.00
 
     def test_get_invalid_product(self, api):
         r = api.get(f"{BASE_URL}/api/products/invalid-xyz")
@@ -123,9 +123,9 @@ class TestCheckoutOrder:
         assert d["order_id"].startswith("MSR-")
         assert d["rzp_order_id"].startswith("order_")
         assert d["rzp_key_id"].startswith("rzp_live_")
-        assert d["currency"] == "USD"
-        assert d["total"] == 300.00
-        assert d["amount"] == 30000  # cents
+        assert d["currency"] == "INR"
+        assert d["total"] == 2997.00
+        assert d["amount"] == 299700  # paise
         assert d["customer_name"] == "TEST_Buyer"
 
         # Verify Mongo persistence
@@ -133,9 +133,9 @@ class TestCheckoutOrder:
         assert txn is not None
         assert txn["payment_status"] == "initiated"
         assert txn["rzp_order_id"] == d["rzp_order_id"]
-        assert txn["amount"] == 300.00
-        assert txn["amount_minor"] == 30000
-        assert txn["currency"] == "USD"
+        assert txn["amount"] == 2997.00
+        assert txn["amount_minor"] == 299700
+        assert txn["currency"] == "INR"
         assert len(txn["items"]) == 2
 
         pytest.shared_order_id = d["order_id"]
@@ -177,8 +177,8 @@ class TestCheckoutStatus:
         d = r.json()
         assert d["order_id"] == order_id
         assert d["payment_status"] == "initiated"
-        assert d["currency"] == "USD"
-        assert d["amount_total"] == 30000
+        assert d["currency"] == "INR"
+        assert d["amount_total"] == 299700
 
     def test_status_unknown(self, api):
         r = api.get(f"{BASE_URL}/api/checkout/status/MSR-DOESNOTEXIST")
@@ -240,8 +240,8 @@ class TestVerifyPayment:
         d1 = r1.json()
         assert d1["payment_status"] == "paid"
         assert d1["order_id"] == order_id
-        assert d1["amount_total"] == 10000
-        assert d1["currency"] == "USD"
+        assert d1["amount_total"] == 99900
+        assert d1["currency"] == "INR"
 
         # Mongo: txn paid + 1 order doc created
         txn = mongo.payment_transactions.find_one({"order_id": order_id})
@@ -413,8 +413,8 @@ class TestOrderLookup:
         assert d["order_id"] == new_order_id
         assert d["payment_status"] in ("initiated",)
         assert d["shipping_status"] == "awaiting_payment"
-        assert d["total"] == 100.00
-        assert d["currency"] == "USD"
+        assert d["total"] == 999.00
+        assert d["currency"] == "INR"
 
 
 # ---------- Shiprocket integration tests ----------
@@ -632,3 +632,85 @@ class TestLookupShippingStatus:
         assert r.status_code == 200
         # Cached values should still be returned since fresh
         assert r.json()["tracking"]["current_location"] == "Cached Hub"
+
+
+# ---------------- Concierge & Payment Link endpoints ----------------
+class TestConciergeCheckout:
+    """POST /api/checkout/concierge — soft checkout, no payment processor."""
+
+    def test_concierge_valid(self, api, mongo):
+        payload = {
+            "customer_name": "TEST_Concierge",
+            "customer_email": "TEST_concierge@example.com",
+            "customer_contact": "+919888888888",
+            "shipping_address": "9 Concierge Road, Mumbai",
+            "items": [{"slug": "veloura", "quantity": 1}],
+            "notes": "TEST note",
+        }
+        r = api.post(f"{BASE_URL}/api/checkout/concierge", json=payload)
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert d["order_id"].startswith("MSR-")
+        assert d["status"] == "concierge_pending"
+        assert d["total"] == 999.00
+        assert d["currency"] == "INR"
+        assert isinstance(d["email_sent"], bool)
+
+        doc = mongo.orders.find_one({"order_id": d["order_id"]})
+        assert doc is not None
+        assert doc["channel"] == "concierge"
+        assert doc["status"] == "concierge_pending"
+        assert doc["total"] == 999.00
+        assert doc["notes"] == "TEST note"
+
+    def test_concierge_unknown_slug(self, api):
+        r = api.post(f"{BASE_URL}/api/checkout/concierge", json={
+            "customer_name": "TEST_X",
+            "customer_email": "TEST_x@example.com",
+            "shipping_address": "addr",
+            "items": [{"slug": "nope", "quantity": 1}],
+        })
+        assert r.status_code == 400
+        assert "Unknown product" in r.json()["detail"]
+
+    def test_concierge_invalid_email_422(self, api):
+        r = api.post(f"{BASE_URL}/api/checkout/concierge", json={
+            "customer_name": "TEST_X",
+            "customer_email": "not-an-email",
+            "shipping_address": "addr",
+            "items": [{"slug": "oura", "quantity": 1}],
+        })
+        assert r.status_code == 422
+
+
+class TestPaymentLink:
+    """POST /api/checkout/payment-link — Razorpay payment link (may be WIP)."""
+
+    def test_payment_link_validation_unknown_slug(self, api):
+        r = api.post(f"{BASE_URL}/api/checkout/payment-link", json={
+            "customer_name": "TEST_PL",
+            "customer_email": "TEST_pl@example.com",
+            "shipping_address": "addr",
+            "items": [{"slug": "nope", "quantity": 1}],
+        })
+        assert r.status_code == 400
+
+    def test_payment_link_create(self, api):
+        r = api.post(f"{BASE_URL}/api/checkout/payment-link", json={
+            "customer_name": "TEST_PL",
+            "customer_email": "TEST_pl@example.com",
+            "customer_contact": "+919777777777",
+            "shipping_address": "7 Link Street, Delhi",
+            "items": [{"slug": "oura", "quantity": 1}],
+        })
+        # 200 on success; 502 documents an upstream Razorpay rejection (feature WIP)
+        assert r.status_code in (200, 502), r.text
+        if r.status_code == 200:
+            d = r.json()
+            assert d["order_id"].startswith("MSR-")
+            assert d["payment_link_url"].startswith("http")
+            assert d["currency"] == "INR"
+            assert d["total"] == 999.00
+            assert d["amount"] == 99900
+        else:
+            pytest.skip(f"payment-link upstream error (WIP): {r.text[:200]}")

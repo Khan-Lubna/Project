@@ -4,8 +4,8 @@ import axios from "axios";
 import { toast } from "sonner";
 import FadeSection from "../components/FadeSection";
 import { formatPrice } from "../lib/format";
+import { API } from "../lib/api";
 
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 const STATUS_COPY = {
   paid: { label: "Payment Confirmed", next: "Your fragrance is being prepared for despatch." },

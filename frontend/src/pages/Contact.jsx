@@ -2,8 +2,7 @@ import { useState } from "react";
 import axios from "axios";
 import { toast } from "sonner";
 import FadeSection from "../components/FadeSection";
-
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+import { API } from "../lib/api";
 
 export default function Contact() {
   const [form, setForm] = useState({ name: "", email: "", subject: "", message: "" });

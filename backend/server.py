@@ -297,6 +297,83 @@ async def _send_order_emails(order_doc: dict) -> tuple[bool, Optional[str]]:
         logger.error(f"Order confirmation email failed: {e}")
         return False, str(e)
 
+async def _send_payment_link_email(order_doc: dict, link_url: str) -> tuple[bool, Optional[str]]:
+    """Send a branded email to the customer with the Razorpay UPI payment link."""
+    if not RESEND_API_KEY:
+        return False, "RESEND_API_KEY not configured"
+    if not link_url:
+        return False, "No payment link URL"
+
+    item_rows = "".join(
+        f"""<tr>
+            <td style="padding:14px 0;border-bottom:1px solid #E5DCC9;color:#1A1A1A;font-family:Georgia,serif;font-size:16px;">
+              <strong style="letter-spacing:0.18em;">{it['name']}</strong>
+              <div style="font-size:11px;letter-spacing:0.2em;text-transform:uppercase;color:#6b6357;margin-top:4px;">50ml · Eau de Parfum</div>
+            </td>
+            <td style="padding:14px 0;border-bottom:1px solid #E5DCC9;text-align:center;color:#1A1A1A;font-family:Arial,sans-serif;font-size:14px;">× {it['quantity']}</td>
+            <td style="padding:14px 0;border-bottom:1px solid #E5DCC9;text-align:right;color:#1A1A1A;font-family:Georgia,serif;font-size:16px;">{_format_currency(it['line_total'], order_doc['currency'])}</td>
+        </tr>"""
+        for it in order_doc.get("items", [])
+    )
+
+    html = f"""
+    <table width="100%" cellpadding="0" cellspacing="0" style="background:#F5F0E8;padding:40px 16px;font-family:Arial,sans-serif;">
+      <tr><td align="center">
+        <table width="560" cellpadding="0" cellspacing="0" style="background:#FBF7F2;border:1px solid #C4A258;">
+          <tr><td style="padding:48px 40px 24px 40px;text-align:center;">
+            <h1 style="margin:0;font-family:Georgia,serif;font-weight:bold;color:#000000;letter-spacing:0.35em;font-size:24px;">MOSSERO</h1>
+            <p style="margin:24px 0 0 0;font-size:10px;letter-spacing:0.3em;text-transform:uppercase;color:#C4A258;">Your payment link</p>
+            <hr style="border:none;border-top:1px solid #C4A258;width:48px;margin:24px auto 0 auto;"/>
+          </td></tr>
+          <tr><td style="padding:0 40px 16px 40px;">
+            <p style="color:#1A1A1A;font-family:Arial,sans-serif;font-size:14px;line-height:1.9;">
+              Dear {order_doc['customer_name']},<br/><br/>
+              Thank you for your selection. Complete your purchase any time within the next 24 hours via UPI — Google Pay, PhonePe, Paytm or BHIM — using the secure link below.
+            </p>
+          </td></tr>
+          <tr><td style="padding:0 40px 32px 40px;text-align:center;">
+            <a href="{link_url}" style="display:inline-block;background:#C4A258;color:#000000;padding:18px 42px;font-family:Arial,sans-serif;font-weight:600;font-size:12px;letter-spacing:0.3em;text-transform:uppercase;text-decoration:none;border:1px solid #C4A258;">Complete Payment</a>
+            <p style="margin:18px 0 0 0;font-family:Arial,sans-serif;font-size:11px;color:#6b6357;word-break:break-all;">{link_url}</p>
+          </td></tr>
+          <tr><td style="padding:0 40px;">
+            <table width="100%" cellpadding="0" cellspacing="0">{item_rows}
+              <tr>
+                <td colspan="2" style="padding:18px 0 0 0;text-align:right;font-family:Arial,sans-serif;font-size:11px;letter-spacing:0.25em;text-transform:uppercase;color:#1A1A1A;">Total</td>
+                <td style="padding:18px 0 0 0;text-align:right;font-family:Georgia,serif;font-size:20px;color:#1A1A1A;">{_format_currency(order_doc['total'], order_doc['currency'])}</td>
+              </tr>
+            </table>
+          </td></tr>
+          <tr><td style="padding:32px 40px;">
+            <p style="margin:0 0 6px 0;font-size:10px;letter-spacing:0.25em;text-transform:uppercase;color:#1A1A1A;">Order reference</p>
+            <p style="margin:0 0 16px 0;font-family:Georgia,serif;font-size:18px;color:#1A1A1A;letter-spacing:0.1em;">{order_doc['order_id']}</p>
+            <p style="margin:0 0 6px 0;font-size:10px;letter-spacing:0.25em;text-transform:uppercase;color:#1A1A1A;">Shipping to</p>
+            <p style="margin:0;font-size:14px;color:#1A1A1A;line-height:1.8;white-space:pre-line;">{order_doc['shipping_address']}</p>
+          </td></tr>
+          <tr><td style="padding:24px 40px;background:#F5F0E8;text-align:center;">
+            <p style="margin:0;font-size:10px;letter-spacing:0.25em;text-transform:uppercase;color:#6b6357;">Leave a trace of elegance wherever you go.</p>
+            <p style="margin:16px 0 0 0;font-size:11px;color:#9b9285;">Maison Mossero · www.mossero.in</p>
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+    """
+    try:
+        await asyncio.to_thread(
+            resend.Emails.send,
+            {
+                "from": SENDER_EMAIL,
+                "to": [order_doc["customer_email"]],
+                "subject": f"[MOSSERO] Your UPI payment link — {order_doc['order_id']}",
+                "html": html,
+            },
+        )
+        return True, None
+    except Exception as e:
+        logger.error(f"Payment link email failed: {e}")
+        return False, str(e)
+
+
+
 
 async def _send_concierge_emails(order_doc: dict) -> tuple[bool, Optional[str]]:
     """Send reservation confirmation to customer + alert to maison (no payment yet)."""
@@ -635,6 +712,134 @@ async def concierge_checkout(req: ConciergeOrderRequest):
     }
 
 
+@api_router.post("/checkout/payment-link")
+async def create_payment_link(req: OrderCreateRequest):
+    """Create a Razorpay Payment Link and email it to the customer for later UPI payment."""
+    if rzp_client is None:
+        raise HTTPException(status_code=500, detail="Razorpay is not configured")
+
+    by_slug = {p["slug"]: p for p in PRODUCTS}
+    total = 0.0
+    currency = "INR"
+    detailed_items = []
+    for item in req.items:
+        p = by_slug.get(item.slug)
+        if not p:
+            raise HTTPException(status_code=400, detail=f"Unknown product: {item.slug}")
+        line_total = p["price"] * item.quantity
+        total += line_total
+        currency = p["currency"]
+        detailed_items.append({
+            "slug": item.slug,
+            "name": p["name"],
+            "unit_price": p["price"],
+            "quantity": item.quantity,
+            "line_total": line_total,
+        })
+    if total <= 0:
+        raise HTTPException(status_code=400, detail="Cart is empty")
+
+    total = round(total, 2)
+    amount_minor = int(round(total * 100))
+    order_id = f"MSR-{uuid.uuid4().hex[:8].upper()}"
+    description = ", ".join(f"{i['name']} × {i['quantity']}" for i in detailed_items)
+
+    try:
+        link = await asyncio.to_thread(
+            rzp_client.payment_link.create,
+            {
+                "amount": amount_minor,
+                "currency": currency,
+                "accept_partial": False,
+                "description": f"MOSSERO order {order_id} — {description}",
+                "customer": {
+                    "name": req.customer_name,
+                    "email": req.customer_email,
+                    "contact": (req.customer_contact or "").lstrip("+") or None,
+                },
+                "notify": {"sms": bool(req.customer_contact), "email": True},
+                "reminder_enable": True,
+                "notes": {
+                    "order_id": order_id,
+                    "shipping": req.shipping_address[:200],
+                },
+                "options": {
+                    "checkout": {
+                        "method": {
+                            "upi": 1,
+                            "card": 0,
+                            "netbanking": 0,
+                            "wallet": 0,
+                            "emi": 0,
+                            "paylater": 0,
+                        }
+                    }
+                },
+            },
+        )
+    except Exception as e:
+        logger.error(f"Razorpay payment_link create failed: {e}")
+        raise HTTPException(status_code=502, detail=f"Razorpay error: {e}")
+
+    rzp_plink_id = link.get("id")
+    short_url = link.get("short_url")
+
+    txn_doc = {
+        "order_id": order_id,
+        "rzp_order_id": None,
+        "rzp_payment_link_id": rzp_plink_id,
+        "payment_link_url": short_url,
+        "customer_name": req.customer_name,
+        "customer_email": req.customer_email,
+        "customer_contact": req.customer_contact,
+        "shipping_address": req.shipping_address,
+        "address_struct": req.address_struct.model_dump() if req.address_struct else None,
+        "items": detailed_items,
+        "amount": total,
+        "amount_minor": amount_minor,
+        "currency": currency,
+        "channel": "payment_link",
+        "payment_status": "link_sent",
+        "status": "link_sent",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.payment_transactions.insert_one(txn_doc)
+
+    # Send our branded email with the link (Razorpay also sends its own; ours is the on-brand one)
+    email_sent, email_error = await _send_payment_link_email(
+        {
+            "order_id": order_id,
+            "customer_name": req.customer_name,
+            "customer_email": req.customer_email,
+            "items": detailed_items,
+            "total": total,
+            "currency": currency,
+            "shipping_address": req.shipping_address,
+        },
+        short_url,
+    )
+
+    await db.payment_transactions.update_one(
+        {"order_id": order_id},
+        {"$set": {
+            "branded_email_sent": email_sent,
+            "branded_email_error": email_error,
+        }},
+    )
+
+    return {
+        "order_id": order_id,
+        "rzp_payment_link_id": rzp_plink_id,
+        "payment_link_url": short_url,
+        "amount": amount_minor,
+        "currency": currency,
+        "total": total,
+        "email_sent": email_sent,
+        "message": "We have emailed you a secure UPI payment link. Complete it any time within 24 hours.",
+    }
+
+
 @api_router.post("/checkout/verify")
 async def verify_payment(req: VerifyPaymentRequest):
     if rzp_client is None:
@@ -731,9 +936,34 @@ async def razorpay_webhook(request: Request):
 
     event = payload.get("event")
     payment_entity = payload.get("payload", {}).get("payment", {}).get("entity", {})
+    plink_entity = payload.get("payload", {}).get("payment_link", {}).get("entity", {})
     rzp_order_id = payment_entity.get("order_id")
     rzp_payment_id = payment_entity.get("id")
+    rzp_plink_id = plink_entity.get("id")
     status = payment_entity.get("status")
+
+    # Payment Link events
+    if event in ("payment_link.paid",) and rzp_plink_id:
+        txn = await db.payment_transactions.find_one(
+            {"rzp_payment_link_id": rzp_plink_id}, {"_id": 0}
+        )
+        if txn:
+            await db.payment_transactions.update_one(
+                {"rzp_payment_link_id": rzp_plink_id},
+                {"$set": {
+                    "payment_status": "paid",
+                    "status": "complete",
+                    "rzp_payment_id": rzp_payment_id or plink_entity.get("payments", [{}])[0].get("payment_id"),
+                    "webhook_event": event,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }},
+            )
+            txn_after = await db.payment_transactions.find_one(
+                {"rzp_payment_link_id": rzp_plink_id}, {"_id": 0}
+            )
+            if txn_after:
+                await _finalize_paid_order(txn_after, txn_after.get("rzp_payment_id"))
+        return {"received": True}
 
     if rzp_order_id:
         update_fields = {

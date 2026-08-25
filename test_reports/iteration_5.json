@@ -1,0 +1,45 @@
+{
+  "summary": "Verified the runtime API-base fix (window.location.origin instead of build-time REACT_APP_BACKEND_URL). STATIC CHECKS PASS: no file under /app/frontend/src/pages/ (nor anywhere in src/ except lib/api.js) references process.env.REACT_APP_BACKEND_URL; all 5 API call sites (Cart checkout/order, Cart checkout/verify, CheckoutSuccess checkout/status, Contact contact, OrderTracking orders/lookup) use `${API}` from lib/api.js; lib/api.js exports API_BASE + API and returns window.location.origin when available with the env var only as SSR fallback; no hardcoded hosts anywhere in src. RUNTIME CHECKS PASS: intercepted every network call in the preview browser and asserted each resolved to window.location.origin. Cart e2e: OURA (Rs.999) added, cart-total Rs.999.00, checkout modal opened, all 7 required fields filled, checkout-submit fired POST https://moss-refined.preview.emergentagent.com/api/checkout/order -> 200 with order_id=MSR-B44CCF41, rzp_order_id=order_TU2SLaBrJ5J8pv, rzp_key_id=rzp_live_SunFsS8dUz6Kgi, amount=99900, currency=INR, and the Razorpay UPI-only modal rendered (2 razorpay elements, 'Pay using UPI' only). Contact: POST /api/contact -> 200, email_sent=true (Resend delivered), success toast shown. Track: POST /api/orders/lookup -> 200, rendered ref/status/total. CheckoutSuccess: GET /api/checkout/status/MSR-B71D46B3 -> 200 payment_status=paid, order-confirmation block rendered. BACKEND: 38/38 pytest pass after I corrected 8 stale price assertions (old $100 USD -> Rs.999 INR) and added new coverage for /checkout/concierge (3 tests) and /checkout/payment-link (2 tests, live link created successfully).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/checkout/order, /api/checkout/concierge", "issue": "Dead/misleading defaults left over from the USD era: `currency = \"USD\"` initializer and the comment `amount_minor = int(round(total * 100))  # USD -> cents`. Harmless today (currency is always overwritten from the catalog and an empty cart 400s first) but confusing; should read INR/paise."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Contact page success toast", "issues": ["Toast body text 'Thank you for reaching out. We will respond shortly.' renders in a muted grey on the near-black toast background - noticeably low contrast versus the bold white 'Thank you' title. Bump the body text lightness for readability."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "DEPLOYMENT PREREQUISITE (highest value item): lib/api.js now assumes the backend is reachable same-origin at <origin>/api. This is true for the Emergent preview ingress and was proven working. It will only fix production if https://mossero.in itself proxies /api/* to the FastAPI service. If the custom domain serves only the static React bundle without an /api route, POST https://mossero.in/api/checkout/order will still 404 - just from a different host. Confirm the mossero.in ingress/custom-domain mapping forwards /api before declaring the bug fixed.",
+    "Note that window.location.origin also breaks the local dev path (yarn start on :3000 would call localhost:3000/api with no CRA proxy configured). Consider preferring REACT_APP_BACKEND_URL when the hostname is localhost, or add a `proxy` field to package.json.",
+    "Optional cleanup: rename the mailto anchor's data-testid on Contact.jsx line 70 from `contact-email` to `contact-email-link` - it currently collides conceptually with the form input `contact-email-input` and silently traps selector-based tests into filling an <a>.",
+    "Optional: fix the stale `currency = \"USD\"` initializers and the 'USD -> cents' comment in create_order / concierge_checkout."
+  ],
+  "critical_code_review_comments": [
+    "lib/api.js resolution logic is correct and defensive: it guards typeof window, window.location and window.location.origin before use, so SSR/jest contexts fall through to REACT_APP_BACKEND_URL. API_BASE is computed once at module load, which is fine for a browser SPA since the origin cannot change without a full page load.",
+    "Verified by grep that lib/api.js is the ONLY file in /app/frontend/src referencing process.env.REACT_APP_BACKEND_URL, satisfying the requested static check. All 5 axios call sites interpolate `${API}`.",
+    "Confirmed at runtime (not just statically): Playwright request interception asserted resp.url.startswith(window.location.origin) for checkout/order, contact, orders/lookup and checkout/status. All four passed.",
+    "Legacy seed data inconsistency: MSR-B71D46B3 is a USD $200 order, so /track and /cart/success correctly but confusingly render '$200.00' while the live catalog is Rs.999 INR. Not a regression - just pre-INR seed data. Any pricing screenshot taken from that order will look wrong.",
+    "The many Razorpay console errors seen during checkout ('Refused to get unsafe header', accelerometer permissions-policy violations, Mixed Content / ERR_CONNECTION_REFUSED against api.razorpay.com's own checkout bundle) all originate inside Razorpay's cross-origin iframe in a headless sandbox. They did not block the modal from rendering the UPI option and are not application bugs.",
+    "/api/checkout/payment-link is NOT work-in-progress as suspected - it successfully created a live Razorpay payment link (HTTP 200) with a valid short_url and UPI-only checkout options during this run.",
+    "Mongo projections {'_id': 0} are consistently applied on all find_one calls; no ObjectId leaked in any response body I inspected."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py"
+  ],
+  "success_rate": {"backend": "100% (38/38 pytest)", "frontend": "100% (4/4 API-consuming pages verified same-origin + rendering)"},
+  "seed_data_creation": "Live-key Razorpay orders created during testing (unpaid, safe): MSR-B44CCF41 (UI flow, Rs.999) plus TEST_-prefixed payment_transactions and one TEST_ concierge order in db.orders, and one live Razorpay payment link for TEST_pl@example.com. One real contact email was delivered via Resend to mossero.in@gmail.com (id a0f2ffb5-af9d-4c7c-8969-85f61805c7d2). No automated cleanup; none of these are paid so no fulfilment is triggered.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "N/A - app has no authentication. /app/memory/test_credentials.md not required for these flows.",
+  "context_for_next_testing_agent": "The runtime API-base fix is verified working in preview; no code changes needed for it. backend_test.py is now INR-correct (Rs.999 / 99900 paise) and covers products, contact, checkout/order, checkout/status, checkout/verify (HMAC-signed, idempotent), webhook/razorpay, orders/lookup (7 cases), shiprocket auth, structured address, lookup shipping-status matrix, concierge (3) and payment-link (2) - 38 tests, all green, run with `python -m pytest tests/backend_test.py -p no:randomly` from /app/backend. Useful fixtures: paid legacy order MSR-B71D46B3 / mossero.in@gmail.com (USD $200 seed). To re-verify the origin fix, intercept responses in Playwright and assert resp.url.startswith(window.location.origin). Contact form input testid is contact-email-input (contact-email is the mailto anchor). Production https://mossero.in remains untestable from here - the open risk is whether that domain proxies /api to the backend.",
+  "rca_of_the_issue": "Root cause of the original production bug: CRA inlines REACT_APP_BACKEND_URL at build time, so the single artifact built in the preview environment hard-baked https://moss-refined.preview.emergentagent.com into every axios URL; shipping that same bundle to mossero.in made the browser POST cross-origin to the preview host, which does not serve the production /api/checkout/order route -> 404. Mitigation implemented and verified: /app/frontend/src/lib/api.js derives the base from window.location.origin at request time, making the artifact host-agnostic; all pages consume the shared API constant. Residual risk (not verifiable from this environment): the fix only holds if the production host terminates and proxies /api/* to the FastAPI backend."
+}
