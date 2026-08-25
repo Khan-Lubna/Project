@@ -7,7 +7,7 @@ export const PRODUCTS = {
     size: "50ml",
     target: "For Him",
     tagline: "Power in every presence.",
-    price: 999.0,
+    price: 1149.0,
     currency: "INR",
     theme: "dark",
     description:
@@ -29,7 +29,7 @@ export const PRODUCTS = {
     size: "50ml",
     target: "For Her",
     tagline: "A trace of the eternal feminine.",
-    price: 999.0,
+    price: 1149.0,
     currency: "INR",
     theme: "light",
     description:
