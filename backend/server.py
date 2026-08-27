@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 import resend
 import razorpay
 import shiprocket_client
+import shopify_client
 
 
 ROOT_DIR = Path(__file__).parent
@@ -38,6 +39,12 @@ RAZORPAY_WEBHOOK_SECRET = os.environ.get('RAZORPAY_WEBHOOK_SECRET', '')
 rzp_client = None
 if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET:
     rzp_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+
+SHOPIFY_STORE_URL = os.environ.get('SHOPIFY_STORE_URL', '')
+SHOPIFY_ACCESS_TOKEN = os.environ.get('SHOPIFY_ACCESS_TOKEN', '')
+SHOPIFY_API_VERSION = os.environ.get('SHOPIFY_API_VERSION', '2024-01')
+
+shopify_client.init_shopify_client(SHOPIFY_STORE_URL, SHOPIFY_ACCESS_TOKEN, SHOPIFY_API_VERSION)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -498,57 +505,83 @@ async def _finalize_paid_order(txn: dict, rzp_payment_id: Optional[str]) -> dict
     """Idempotently create the orders record and send confirmation emails."""
     order_id = txn["order_id"]
     existing = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
+
     if existing:
-        return existing
+        if existing.get("shopify_order_id"):
+            return existing
+        order_doc = existing
+    else:
+        order_doc = {
+            "order_id": order_id,
+            "rzp_order_id": txn["rzp_order_id"],
+            "rzp_payment_id": rzp_payment_id or txn.get("rzp_payment_id"),
+            "customer_name": txn["customer_name"],
+            "customer_email": txn["customer_email"],
+            "customer_contact": txn.get("customer_contact"),
+            "shipping_address": txn["shipping_address"],
+            "address_struct": txn.get("address_struct"),
+            "items": txn["items"],
+            "total": txn["amount"],
+            "currency": txn["currency"],
+            "status": "paid",
+            "confirmation_email_sent": False,
+            "confirmation_email_error": None,
+            "shiprocket_order_id": None,
+            "shiprocket_shipment_id": None,
+            "awb_number": None,
+            "courier_name": None,
+            "shiprocket_error": None,
+            "tracking_cached_at": None,
+            "tracking": None,
+            "shopify_order_id": None,
+            "shopify_order_number": None,
+            "shopify_error": None,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.orders.insert_one(order_doc)
 
-    order_doc = {
-        "order_id": order_id,
-        "rzp_order_id": txn["rzp_order_id"],
-        "rzp_payment_id": rzp_payment_id or txn.get("rzp_payment_id"),
-        "customer_name": txn["customer_name"],
-        "customer_email": txn["customer_email"],
-        "customer_contact": txn.get("customer_contact"),
-        "shipping_address": txn["shipping_address"],
-        "address_struct": txn.get("address_struct"),
-        "items": txn["items"],
-        "total": txn["amount"],
-        "currency": txn["currency"],
-        "status": "paid",
-        "confirmation_email_sent": False,
-        "confirmation_email_error": None,
-        "shiprocket_order_id": None,
-        "shiprocket_shipment_id": None,
-        "awb_number": None,
-        "courier_name": None,
-        "shiprocket_error": None,
-        "tracking_cached_at": None,
-        "tracking": None,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await db.orders.insert_one(order_doc)
-
-    sent, error = await _send_order_emails(order_doc)
-    await db.orders.update_one(
-        {"order_id": order_id},
-        {"$set": {
-            "confirmation_email_sent": sent,
-            "confirmation_email_error": error,
-        }},
-    )
-    order_doc["confirmation_email_sent"] = sent
-    order_doc["confirmation_email_error"] = error
+        sent, error = await _send_order_emails(order_doc)
+        await db.orders.update_one(
+            {"order_id": order_id},
+            {"$set": {
+                "confirmation_email_sent": sent,
+                "confirmation_email_error": error,
+            }},
+        )
+        order_doc["confirmation_email_sent"] = sent
+        order_doc["confirmation_email_error"] = error
 
     # Best-effort Shiprocket adhoc order creation (does not block on failure)
-    sr_result = await shiprocket_client.create_adhoc_order(order_doc)
-    sr_update = {
-        "shiprocket_order_id": sr_result.get("shiprocket_order_id") or None,
-        "shiprocket_shipment_id": sr_result.get("shipment_id") or None,
-        "awb_number": sr_result.get("awb_number") or None,
-        "courier_name": sr_result.get("courier_name") or None,
-        "shiprocket_error": None if sr_result.get("success") else sr_result.get("error"),
-    }
-    await db.orders.update_one({"order_id": order_id}, {"$set": sr_update})
-    order_doc.update(sr_update)
+    if not existing:
+        sr_result = await shiprocket_client.create_adhoc_order(order_doc)
+        sr_update = {
+            "shiprocket_order_id": sr_result.get("shiprocket_order_id") or None,
+            "shiprocket_shipment_id": sr_result.get("shipment_id") or None,
+            "awb_number": sr_result.get("awb_number") or None,
+            "courier_name": sr_result.get("courier_name") or None,
+            "shiprocket_error": None if sr_result.get("success") else sr_result.get("error"),
+        }
+        await db.orders.update_one({"order_id": order_id}, {"$set": sr_update})
+        order_doc.update(sr_update)
+
+    # Best-effort Shopify Admin order creation (does not block on failure)
+    if not order_doc.get("shopify_order_id"):
+        shopify_result = await shopify_client.create_shopify_order(order_doc)
+        if shopify_result.get("success"):
+            shopify_update = {
+                "shopify_order_id": shopify_result.get("shopify_order_id"),
+                "shopify_order_number": shopify_result.get("order_number"),
+                "shopify_error": None,
+            }
+        else:
+            shopify_update = {
+                "shopify_order_id": None,
+                "shopify_order_number": None,
+                "shopify_error": shopify_result.get("error"),
+            }
+        await db.orders.update_one({"order_id": order_id}, {"$set": shopify_update})
+        order_doc.update(shopify_update)
+
     return order_doc
 
 
@@ -1157,6 +1190,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def startup_event():
+    if shopify_client.shopify_client:
+        validation = await shopify_client.shopify_client.validate_token()
+        if not validation.get("valid"):
+            logger.warning(f"Shopify token invalid: {validation.get('error')}")
+            shopify_client.shopify_client.disable()
 
 
 @app.on_event("shutdown")
