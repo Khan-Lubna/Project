@@ -62,6 +62,26 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="MOSSERO API")
 api_router = APIRouter(prefix="/api")
 
+@api_router.get("/shopify-config-check")
+async def shopify_config_check():
+    import hashlib
+
+    def fingerprint(value):
+        value = value or ""
+        return {
+            "configured": bool(value),
+            "length": len(value),
+            "fingerprint": hashlib.sha256(
+                value.encode()
+            ).hexdigest()[:12],
+        }
+
+    return {
+        "store_url": SHOPIFY_STORE_URL,
+        "client_id": fingerprint(SHOPIFY_CLIENT_ID),
+        "client_secret": fingerprint(SHOPIFY_CLIENT_SECRET),
+    }
+
 
 # ---------------- Static product catalog ----------------
 PRODUCTS = [
