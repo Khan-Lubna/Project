@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams, Navigate, Link, useNavigate } from "react-router-dom";
 import { Minus, Plus } from "lucide-react";
 import { toast } from "sonner";
@@ -6,13 +6,111 @@ import { PRODUCTS } from "../lib/products";
 import { useCart } from "../context/CartContext";
 import FadeSection from "../components/FadeSection";
 import { formatPrice } from "../lib/format";
+import {
+  USE_SHOPIFY_CATALOG,
+  fetchProductByHandle,
+} from "../lib/shopify";
+
 
 export default function Product() {
   const { slug } = useParams();
-  const product = PRODUCTS[slug];
   const navigate = useNavigate();
   const { addItem } = useCart();
+
+  const staticProduct = PRODUCTS[slug];
+
+  const [productState, setProductState] = useState(() => ({
+    slug,
+    product: staticProduct || null,
+    loading: USE_SHOPIFY_CATALOG,
+    priceVerified: !USE_SHOPIFY_CATALOG,
+  }));
+
   const [qty, setQty] = useState(1);
+
+  useEffect(() => {
+    let active = true;
+    const fallback = PRODUCTS[slug] || null;
+
+    setProductState({
+      slug,
+      product: fallback,
+      loading: USE_SHOPIFY_CATALOG,
+      priceVerified: !USE_SHOPIFY_CATALOG,
+    });
+
+    if (!USE_SHOPIFY_CATALOG) {
+      return () => {
+        active = false;
+      };
+    }
+
+    fetchProductByHandle(slug)
+      .then((shopifyProduct) => {
+        if (!active) return;
+
+        if (!shopifyProduct?.shopify?.variants?.length) {
+          throw new Error("Shopify product or variants are unavailable.");
+        }
+
+        const selectedVariant =
+          shopifyProduct.shopify.variants.find(
+            (variant) =>
+              variant.availableForSale &&
+              variant.currency === "INR" &&
+              Number.isFinite(Number(variant.price)) &&
+              Number(variant.price) > 0
+          );
+
+        if (!selectedVariant) {
+          throw new Error("No available Shopify variant with a valid INR price.");
+        }
+
+        setProductState({
+          slug,
+          product: {
+            ...fallback,
+            ...shopifyProduct,
+            price: Number(selectedVariant.price),
+            currency: selectedVariant.currency,
+          },
+          loading: false,
+          priceVerified: true,
+        });
+      })
+      .catch((error) => {
+        if (!active) return;
+
+        console.error("Unable to verify Shopify product price:", error);
+
+        setProductState({
+          slug,
+          product: fallback,
+          loading: false,
+          priceVerified: false,
+        });
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [slug]);
+
+  const product =
+    productState.slug === slug
+      ? productState.product
+      : staticProduct || null;
+
+  const isLoading =
+    productState.slug === slug && productState.loading;
+
+  if (isLoading && !product) {
+    return (
+      <div className="bg-cream min-h-screen pt-32 text-center">
+        Loading fragrance...
+      </div>
+    );
+  }
 
   if (!product) return <Navigate to="/fragrances" replace />;
 
@@ -36,14 +134,32 @@ export default function Product() {
       priceBg: "bg-offwhite",
     };
 
+  const priceVerified =
+    productState.slug === slug && productState.priceVerified;
+
   const handleAdd = () => {
+    if (USE_SHOPIFY_CATALOG && !priceVerified) {
+      toast.error("Product price could not be verified", {
+        description: "Please try again later.",
+      });
+      return;
+    }
+
     addItem(product, qty);
+
     toast.success(`${product.name} added to your cart`, {
       description: `${qty} × ${product.size} Eau de Parfum`,
     });
   };
 
   const handleBuyNow = () => {
+    if (USE_SHOPIFY_CATALOG && !priceVerified) {
+      toast.error("Product price could not be verified", {
+        description: "Please try again later.",
+      });
+      return;
+    }
+
     addItem(product, qty);
     navigate("/cart");
   };
@@ -99,7 +215,22 @@ export default function Product() {
             <h3 className="font-serif text-3xl lg:text-4xl mb-8 tracking-wider">
               {product.name}
             </h3>
-            <p className="font-serif text-2xl mb-10">{formatPrice(product.price, product.currency)}</p>
+            {priceVerified ? (
+              <p className="font-serif text-2xl mb-10">
+                {formatPrice(product.price, product.currency)}
+              </p>
+            ) : (
+              <p className="font-serif text-xl mb-10">
+                {isLoading ? "Verifying price..." : "Price unavailable"}
+              </p>
+            )}
+            {USE_SHOPIFY_CATALOG && !priceVerified && (
+              <p className="text-sm text-red-700 mb-6">
+                {isLoading
+                  ? "Verifying latest price..."
+                  : "Price currently unavailable. Please try again later."}
+              </p>
+            )}
 
             <p className="luxe-label" style={{ color: isDark ? "#FBF7F2" : undefined }}>
               Quantity
@@ -132,14 +263,16 @@ export default function Product() {
             <button
               data-testid="add-to-cart-btn"
               onClick={handleAdd}
-              className="btn-gold w-full mb-4"
+              className="btn-gold w-full mb-4 disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={USE_SHOPIFY_CATALOG && !priceVerified}
             >
               Add to Cart
             </button>
             <button
               data-testid="buy-now-btn"
               onClick={handleBuyNow}
-              className={isDark ? "btn-outline-light w-full" : "btn-outline-gold w-full"}
+              className={`${isDark ? "btn-outline-light" : "btn-outline-gold"} w-full disabled:opacity-50 disabled:cursor-not-allowed`}
+              disabled={USE_SHOPIFY_CATALOG && !priceVerified}
             >
               Buy Now
             </button>

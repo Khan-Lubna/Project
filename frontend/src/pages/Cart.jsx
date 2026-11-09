@@ -11,7 +11,14 @@ import { API } from "../lib/api";
 
 export default function Cart() {
   const navigate = useNavigate();
-  const { items, removeItem, updateQty, subtotal, clear } = useCart();
+  const {
+    items,
+    removeItem,
+    updateQty,
+    subtotal,
+    clear,
+    shopifyPricesStatus,
+  } = useCart();
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [form, setForm] = useState({
@@ -27,10 +34,20 @@ export default function Cart() {
   });
 
   const currency = items[0]?.currency || "INR";
+  const pricesVerified = shopifyPricesStatus === "verified";
   const update = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
   const startCheckout = async (e) => {
     e.preventDefault();
+    if (!pricesVerified) {
+      toast.error("Checkout is temporarily unavailable", {
+        description:
+          shopifyPricesStatus === "loading"
+            ? "Please wait while we verify the latest product prices."
+            : "We couldn't verify the latest product prices. Please try again later.",
+      });
+      return;
+    }
     const required = [
       "customer_name",
       "customer_email",
@@ -281,13 +298,32 @@ export default function Cart() {
                     {formatPrice(subtotal, currency)}
                   </span>
                 </div>
-                <button
+                {/* <button
                   data-testid="checkout-btn"
                   onClick={() => setCheckoutOpen(true)}
                   className="btn-gold w-full mt-8"
                 >
                   Pay with UPI
+                </button> */}
+                <button
+                  data-testid="checkout-btn"
+                  onClick={() => setCheckoutOpen(true)}
+                  disabled={!pricesVerified}
+                  className="btn-gold w-full mt-8 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {!pricesVerified
+                    ? shopifyPricesStatus === "loading"
+                      ? "Verifying Prices..."
+                      : "Checkout Unavailable"
+                    : "Pay with UPI"}
                 </button>
+                {!pricesVerified && (
+                  <p className="text-xs text-center text-red-700 mt-3">
+                    {shopifyPricesStatus === "loading"
+                      ? "Please wait while we verify product prices."
+                      : "Product prices could not be verified. Please try again later."}
+                  </p>
+                )}
                 <p className="text-[10px] uppercase tracking-luxe text-ink/55 mt-6 text-center leading-[1.8]">
                   Secured by Razorpay<br />
                   GPay · PhonePe · Paytm · BHIM UPI
@@ -432,8 +468,9 @@ export default function Cart() {
               <button
                 type="submit"
                 data-testid="checkout-submit"
-                disabled={submitting}
-                className="btn-gold w-full mt-8"
+                disabled={submitting || !pricesVerified}
+                // className="btn-gold w-full mt-8"
+                className="btn-gold w-full mt-8 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {submitting ? "Opening UPI…" : "Continue to UPI Payment"}
               </button>

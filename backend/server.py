@@ -1,7 +1,9 @@
+from decimal import Decimal, ROUND_HALF_UP
 from fastapi import FastAPI, APIRouter, HTTPException, Request
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo.errors import DuplicateKeyError
 import os
 import asyncio
 import logging
@@ -11,12 +13,11 @@ from pathlib import Path
 from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import resend
 import razorpay
 import shiprocket_client
 import shopify_client
-
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -40,11 +41,17 @@ rzp_client = None
 if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET:
     rzp_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
 
-SHOPIFY_STORE_URL = os.environ.get('SHOPIFY_STORE_URL', '')
-SHOPIFY_ACCESS_TOKEN = os.environ.get('SHOPIFY_ACCESS_TOKEN', '')
-SHOPIFY_API_VERSION = os.environ.get('SHOPIFY_API_VERSION', '2024-01')
+SHOPIFY_STORE_URL = os.environ.get("SHOPIFY_STORE_URL", "")
+SHOPIFY_CLIENT_ID = os.environ.get("SHOPIFY_CLIENT_ID", "")
+SHOPIFY_CLIENT_SECRET = os.environ.get("SHOPIFY_CLIENT_SECRET", "")
+SHOPIFY_API_VERSION = os.environ.get("SHOPIFY_API_VERSION", "2026-04")
 
-shopify_client.init_shopify_client(SHOPIFY_STORE_URL, SHOPIFY_ACCESS_TOKEN, SHOPIFY_API_VERSION)
+shopify_client.init_shopify_client(
+    SHOPIFY_STORE_URL,
+    SHOPIFY_CLIENT_ID,
+    SHOPIFY_CLIENT_SECRET,
+    SHOPIFY_API_VERSION,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -151,7 +158,7 @@ class OrderCreateResponse(BaseModel):
     order_id: str
     rzp_order_id: str
     rzp_key_id: str
-    amount: int  # smallest unit (cents)
+    amount: int  # amount in paise
     currency: str
     total: float
     customer_name: str
@@ -194,17 +201,70 @@ async def root():
     return {"message": "MOSSERO API"}
 
 
+async def _get_shopify_priced_products(products: list) -> list:
+    client = shopify_client.shopify_client
+
+    if client is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Product pricing is temporarily unavailable.",
+        )
+
+    try:
+        slugs = [product["slug"] for product in products]
+        pricing = await client.get_variant_prices(slugs)
+
+        currency = pricing["currency"]
+        prices = pricing["prices"]
+
+        if currency != "INR":
+            raise ValueError(f"Unexpected Shopify currency: {currency}")
+
+        updated_products = []
+
+        for product in products:
+            price = Decimal(str(prices[product["slug"]]))
+
+            if not price.is_finite() or price <= 0:
+                raise ValueError(
+                    f"Invalid Shopify price for {product['slug']}"
+                )
+
+            updated_products.append({
+                **product,
+                "price": float(price),
+                "currency": currency,
+            })
+
+        return updated_products
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Shopify product catalogue lookup failed: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to retrieve current product prices.",
+        )
+
+
 @api_router.get("/products", response_model=List[Product])
 async def list_products():
-    return PRODUCTS
+    return await _get_shopify_priced_products(PRODUCTS)
 
 
 @api_router.get("/products/{slug}", response_model=Product)
 async def get_product(slug: str):
-    for p in PRODUCTS:
-        if p["slug"] == slug:
-            return p
-    raise HTTPException(status_code=404, detail="Product not found")
+    product = next(
+        (p for p in PRODUCTS if p["slug"] == slug),
+        None,
+    )
+
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    priced_products = await _get_shopify_priced_products([product])
+    return priced_products[0]
 
 
 def _verify_signature(payload: str, signature: str, secret: str) -> bool:
@@ -501,6 +561,49 @@ async def _send_concierge_emails(order_doc: dict) -> tuple[bool, Optional[str]]:
         return False, str(e)
 
 
+async def _claim_shopify_sync(order_id: str) -> Optional[str]:
+    """
+    Atomically claim Shopify synchronization for an order.
+    Returns a unique claim token if successful, otherwise None.
+    """
+    now = datetime.now(timezone.utc)
+    claim_token = str(uuid.uuid4())
+    lease_until = now + timedelta(minutes=5)
+
+    result = await db.orders.update_one(
+        {
+            "order_id": order_id,
+            "shopify_order_id": {"$in": [None, ""]},
+            "$or": [
+                {"shopify_sync_status": {"$in": [None, "failed"]}},
+                {
+                    "shopify_sync_status": "processing",
+                    "shopify_sync_lease_until": {"$lte": now},
+                },
+            ],
+        },
+        {
+            "$set": {
+                "shopify_sync_status": "processing",
+                "shopify_sync_token": claim_token,
+                "shopify_sync_started_at": now,
+                "shopify_sync_lease_until": lease_until,
+                "shopify_error": None,
+            }
+        },
+    )
+
+    if result.modified_count == 1:
+        logger.info("Claimed Shopify sync for order %s", order_id)
+        return claim_token
+
+    logger.info(
+        "Shopify sync claim unavailable for order %s; another attempt may be active",
+        order_id,
+    )
+    return None
+
+
 async def _finalize_paid_order(txn: dict, rzp_payment_id: Optional[str]) -> dict:
     """Idempotently create the orders record and send confirmation emails."""
     order_id = txn["order_id"]
@@ -538,49 +641,166 @@ async def _finalize_paid_order(txn: dict, rzp_payment_id: Optional[str]) -> dict
             "shopify_error": None,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
-        await db.orders.insert_one(order_doc)
+        try:
+            await db.orders.insert_one(order_doc)
 
-        sent, error = await _send_order_emails(order_doc)
+        except DuplicateKeyError:
+            logger.warning(
+                "Order %s was already created by another callback",
+                order_id,
+            )
+
+            existing = await db.orders.find_one(
+                {"order_id": order_id},
+                {"_id": 0},
+            )
+
+            if not existing:
+                raise
+
+            order_doc = existing
+            existing = order_doc
+
+        else:
+            sent, error = await _send_order_emails(order_doc)
+
+            await db.orders.update_one(
+                {"order_id": order_id},
+                {"$set": {
+                    "confirmation_email_sent": sent,
+                    "confirmation_email_error": error,
+                }},
+            )
+
+            order_doc["confirmation_email_sent"] = sent
+            order_doc["confirmation_email_error"] = error
+
+        # Best-effort Shiprocket adhoc order creation (does not block paid-order finalization)
+    if not existing:
+        try:
+            sr_result = await shiprocket_client.create_adhoc_order(order_doc)
+            sr_update = {
+                "shiprocket_order_id": sr_result.get("shiprocket_order_id") or None,
+                "shiprocket_shipment_id": sr_result.get("shipment_id") or None,
+                "awb_number": sr_result.get("awb_number") or None,
+                "courier_name": sr_result.get("courier_name") or None,
+                "shiprocket_error": (
+                    None if sr_result.get("success") else sr_result.get("error")
+                ),
+            }
+        except Exception as exc:
+            logger.exception("Shiprocket order creation failed for order %s", order_id)
+            sr_update = {
+                "shiprocket_order_id": None,
+                "shiprocket_shipment_id": None,
+                "awb_number": None,
+                "courier_name": None,
+                "shiprocket_error": str(exc),
+            }
+
         await db.orders.update_one(
             {"order_id": order_id},
-            {"$set": {
-                "confirmation_email_sent": sent,
-                "confirmation_email_error": error,
-            }},
+            {"$set": sr_update},
         )
-        order_doc["confirmation_email_sent"] = sent
-        order_doc["confirmation_email_error"] = error
-
-    # Best-effort Shiprocket adhoc order creation (does not block on failure)
-    if not existing:
-        sr_result = await shiprocket_client.create_adhoc_order(order_doc)
-        sr_update = {
-            "shiprocket_order_id": sr_result.get("shiprocket_order_id") or None,
-            "shiprocket_shipment_id": sr_result.get("shipment_id") or None,
-            "awb_number": sr_result.get("awb_number") or None,
-            "courier_name": sr_result.get("courier_name") or None,
-            "shiprocket_error": None if sr_result.get("success") else sr_result.get("error"),
-        }
-        await db.orders.update_one({"order_id": order_id}, {"$set": sr_update})
         order_doc.update(sr_update)
 
-    # Best-effort Shopify Admin order creation (does not block on failure)
+    # Best-effort Shopify Admin order creation with atomic claim
     if not order_doc.get("shopify_order_id"):
-        shopify_result = await shopify_client.create_shopify_order(order_doc)
-        if shopify_result.get("success"):
-            shopify_update = {
-                "shopify_order_id": shopify_result.get("shopify_order_id"),
-                "shopify_order_number": shopify_result.get("order_number"),
-                "shopify_error": None,
-            }
+        claim_token = await _claim_shopify_sync(order_id)
+
+        if claim_token:
+            try:
+                shopify_result = await shopify_client.create_shopify_order(order_doc)
+
+                outcome = shopify_result.get("outcome", "unknown")
+                shopify_order_id = shopify_result.get("shopify_order_id")
+
+                if outcome == "success" and shopify_order_id:
+                    shopify_update = {
+                        "shopify_order_id": shopify_order_id,
+                        "shopify_order_number": shopify_result.get("order_number"),
+                        "shopify_error": None,
+                        "shopify_sync_status": "synced",
+                        "shopify_sync_completed_at": datetime.now(timezone.utc),
+                    }
+
+                elif outcome == "failed":
+                    shopify_update = {
+                        "shopify_error": shopify_result.get("error"),
+                        "shopify_sync_status": "failed",
+                    }
+
+                else:
+                    shopify_update = {
+                        "shopify_error": shopify_result.get("error")
+                        or "Shopify creation outcome is unknown; manual reconciliation required",
+                        "shopify_sync_status": "unknown",
+                    }
+
+                update_result = await db.orders.update_one(
+                    {
+                        "order_id": order_id,
+                        "shopify_sync_token": claim_token,
+                    },
+                    {
+                        "$set": shopify_update,
+                        "$unset": {
+                            "shopify_sync_token": "",
+                            "shopify_sync_lease_until": "",
+                        },
+                    },
+                )
+
+                if update_result.modified_count == 1:
+                    order_doc.update(shopify_update)
+                else:
+                    logger.warning(
+                        "Shopify sync result not saved because claim ownership changed for order %s",
+                        order_id,
+                    )
+
+
+            except Exception as exc:
+                logger.exception(
+                    "Unexpected Shopify sync error for order %s", order_id
+                )
+
+                try:
+                    await db.orders.update_one(
+                        {
+                            "order_id": order_id,
+                            "shopify_sync_token": claim_token,
+                        },
+                        {
+                            "$set": {
+                                "shopify_sync_status": "unknown",
+                                "shopify_error": str(exc),
+                            },
+                            "$unset": {
+                                "shopify_sync_token": "",
+                                "shopify_sync_lease_until": "",
+                            },
+                        },
+                    )
+                except Exception:
+                    logger.exception(
+                        "Could not persist Shopify sync error for order %s",
+                        order_id,
+                    )
+
         else:
-            shopify_update = {
-                "shopify_order_id": None,
-                "shopify_order_number": None,
-                "shopify_error": shopify_result.get("error"),
-            }
-        await db.orders.update_one({"order_id": order_id}, {"$set": shopify_update})
-        order_doc.update(shopify_update)
+            logger.info(
+                "Skipping Shopify creation for order %s; sync is already claimed or needs reconciliation",
+                order_id,
+            )
+
+        # Return the latest persisted state rather than a potentially stale copy.
+        latest_order = await db.orders.find_one(
+            {"order_id": order_id},
+            {"_id": 0},
+        )
+        if latest_order:
+            order_doc = latest_order
 
     return order_doc
 
@@ -590,30 +810,84 @@ async def create_order(req: OrderCreateRequest):
     if rzp_client is None:
         raise HTTPException(status_code=500, detail="Razorpay is not configured")
 
-    by_slug = {p["slug"]: p for p in PRODUCTS}
-    total = 0.0
-    currency = "USD"
-    detailed_items = []
+    if not req.items:
+            raise HTTPException(status_code=400, detail="Cart is empty")
+
+        # Validate product slugs before contacting Shopify.
+    product_catalog = {p["slug"]: p for p in PRODUCTS}
+
     for item in req.items:
-        p = by_slug.get(item.slug)
-        if not p:
-            raise HTTPException(status_code=400, detail=f"Unknown product: {item.slug}")
-        line_total = p["price"] * item.quantity
-        total += line_total
-        currency = p["currency"]
-        detailed_items.append({
-            "slug": item.slug,
-            "name": p["name"],
-            "unit_price": p["price"],
-            "quantity": item.quantity,
-            "line_total": line_total,
-        })
+        if item.slug not in product_catalog:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown product: {item.slug}",
+            )
 
-    if total <= 0:
-        raise HTTPException(status_code=400, detail="Cart is empty")
+    # Shopify must be available to provide authoritative prices.
+    client = shopify_client.shopify_client
 
-    total = round(total, 2)
-    amount_minor = int(round(total * 100))  # USD -> cents
+    if client is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Product pricing is temporarily unavailable. Please try again later.",
+        )
+
+    try:
+        slugs = list(dict.fromkeys(item.slug for item in req.items))
+        shopify_pricing = await client.get_variant_prices(slugs)
+
+        currency = shopify_pricing["currency"]
+        prices = shopify_pricing["prices"]
+
+        if currency != "INR":
+            raise ValueError(f"Unexpected Shopify store currency: {currency}")
+
+        total_decimal = Decimal("0")
+        detailed_items = []
+
+        product_catalog = {p["slug"]: p for p in PRODUCTS}
+
+        for item in req.items:
+            product = product_catalog[item.slug]
+
+            unit_price = Decimal(str(prices[item.slug]))
+
+            if not unit_price.is_finite() or unit_price <= 0:
+                raise ValueError(f"Invalid Shopify price for {item.slug}")
+
+            line_total = unit_price * item.quantity
+            total_decimal += line_total
+
+            detailed_items.append({
+                "slug": item.slug,
+                "name": product["name"],
+                "unit_price": float(unit_price),
+                "quantity": item.quantity,
+                "line_total": float(line_total),
+            })
+
+        total_decimal = total_decimal.quantize(
+            Decimal("0.01"),
+            rounding=ROUND_HALF_UP,
+        )
+
+        amount_minor = int(
+            (total_decimal * 100).to_integral_value(rounding=ROUND_HALF_UP)
+        )
+
+        total = float(total_decimal)
+
+        if amount_minor <= 0:
+            raise ValueError("Calculated checkout amount must be positive")
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Shopify checkout price lookup failed: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to verify current product prices. Please try again later.",
+        )
     order_id = f"MSR-{uuid.uuid4().hex[:8].upper()}"
 
     try:
@@ -673,28 +947,70 @@ async def create_order(req: OrderCreateRequest):
 async def concierge_checkout(req: ConciergeOrderRequest):
     """Soft checkout — no payment processor. Records the reservation and
     emails both the maison and the customer. The maison invoices manually."""
-    by_slug = {p["slug"]: p for p in PRODUCTS}
-    total = 0.0
-    currency = "USD"
-    detailed_items = []
-    for item in req.items:
-        p = by_slug.get(item.slug)
-        if not p:
-            raise HTTPException(status_code=400, detail=f"Unknown product: {item.slug}")
-        line_total = p["price"] * item.quantity
-        total += line_total
-        currency = p["currency"]
-        detailed_items.append({
-            "slug": item.slug,
-            "name": p["name"],
-            "unit_price": p["price"],
-            "quantity": item.quantity,
-            "line_total": line_total,
-        })
-    if total <= 0:
+    if not req.items:
         raise HTTPException(status_code=400, detail="Cart is empty")
 
-    total = round(total, 2)
+    client = shopify_client.shopify_client
+
+    if client is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Product pricing is temporarily unavailable.",
+        )
+
+    try:
+        slugs = list(dict.fromkeys(item.slug for item in req.items))
+        shopify_pricing = await client.get_variant_prices(slugs)
+
+        currency = shopify_pricing["currency"]
+        prices = shopify_pricing["prices"]
+
+        if currency != "INR":
+            raise ValueError(f"Unexpected Shopify currency: {currency}")
+
+        product_catalog = {p["slug"]: p for p in PRODUCTS}
+        total_decimal = Decimal("0")
+        detailed_items = []
+
+        for item in req.items:
+            product = product_catalog.get(item.slug)
+
+            if not product:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unknown product: {item.slug}",
+                )
+
+            unit_price = Decimal(str(prices[item.slug]))
+
+            if not unit_price.is_finite() or unit_price <= 0:
+                raise ValueError(f"Invalid Shopify price for {item.slug}")
+
+            line_total = unit_price * item.quantity
+            total_decimal += line_total
+
+            detailed_items.append({
+                "slug": item.slug,
+                "name": product["name"],
+                "unit_price": float(unit_price),
+                "quantity": item.quantity,
+                "line_total": float(line_total),
+            })
+
+        total_decimal = total_decimal.quantize(
+            Decimal("0.01"),
+            rounding=ROUND_HALF_UP,
+        )
+        total = float(total_decimal)
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Shopify concierge pricing failed: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to verify current product prices.",
+        )
     order_id = f"MSR-{uuid.uuid4().hex[:8].upper()}"
     now_iso = datetime.now(timezone.utc).isoformat()
 
@@ -751,31 +1067,83 @@ async def create_payment_link(req: OrderCreateRequest):
     if rzp_client is None:
         raise HTTPException(status_code=500, detail="Razorpay is not configured")
 
-    by_slug = {p["slug"]: p for p in PRODUCTS}
-    total = 0.0
-    currency = "INR"
-    detailed_items = []
-    for item in req.items:
-        p = by_slug.get(item.slug)
-        if not p:
-            raise HTTPException(status_code=400, detail=f"Unknown product: {item.slug}")
-        line_total = p["price"] * item.quantity
-        total += line_total
-        currency = p["currency"]
-        detailed_items.append({
-            "slug": item.slug,
-            "name": p["name"],
-            "unit_price": p["price"],
-            "quantity": item.quantity,
-            "line_total": line_total,
-        })
-    if total <= 0:
+    if not req.items:
         raise HTTPException(status_code=400, detail="Cart is empty")
 
-    total = round(total, 2)
-    amount_minor = int(round(total * 100))
+    client = shopify_client.shopify_client
+
+    if client is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Product pricing is temporarily unavailable.",
+        )
+
+    try:
+        slugs = list(dict.fromkeys(item.slug for item in req.items))
+        shopify_pricing = await client.get_variant_prices(slugs)
+
+        currency = shopify_pricing["currency"]
+        prices = shopify_pricing["prices"]
+
+        if currency != "INR":
+            raise ValueError(f"Unexpected Shopify currency: {currency}")
+
+        total_decimal = Decimal("0")
+        detailed_items = []
+        product_catalog = {p["slug"]: p for p in PRODUCTS}
+
+        for item in req.items:
+            product = product_catalog.get(item.slug)
+
+            if not product:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unknown product: {item.slug}",
+                )
+
+            unit_price = Decimal(str(prices[item.slug]))
+
+            if not unit_price.is_finite() or unit_price <= 0:
+                raise ValueError(f"Invalid Shopify price for {item.slug}")
+
+            line_total = unit_price * item.quantity
+            total_decimal += line_total
+
+            detailed_items.append({
+                "slug": item.slug,
+                "name": product["name"],
+                "unit_price": float(unit_price),
+                "quantity": item.quantity,
+                "line_total": float(line_total),
+            })
+
+        total_decimal = total_decimal.quantize(
+            Decimal("0.01"),
+            rounding=ROUND_HALF_UP,
+        )
+
+        total = float(total_decimal)
+        amount_minor = int(
+            (total_decimal * 100).to_integral_value(
+                rounding=ROUND_HALF_UP
+            )
+        )
+
+        if amount_minor <= 0:
+            raise ValueError("Calculated payment amount must be positive")
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Shopify payment-link price lookup failed: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to verify current product prices.",
+        )
     order_id = f"MSR-{uuid.uuid4().hex[:8].upper()}"
-    description = ", ".join(f"{i['name']} × {i['quantity']}" for i in detailed_items)
+    description = ", ".join(
+        f"{i['name']} x {i['quantity']}" for i in detailed_items
+    )
 
     try:
         link = await asyncio.to_thread(
@@ -784,7 +1152,7 @@ async def create_payment_link(req: OrderCreateRequest):
                 "amount": amount_minor,
                 "currency": currency,
                 "accept_partial": False,
-                "description": f"MOSSERO order {order_id} — {description}",
+                "description": f"MOSSERO order {order_id} - {description}",
                 "customer": {
                     "name": req.customer_name,
                     "email": req.customer_email,
@@ -873,21 +1241,111 @@ async def create_payment_link(req: OrderCreateRequest):
     }
 
 
+
 @api_router.post("/checkout/verify")
 async def verify_payment(req: VerifyPaymentRequest):
     if rzp_client is None:
-        raise HTTPException(status_code=500, detail="Razorpay is not configured")
+        raise HTTPException(
+            status_code=500,
+            detail="Razorpay is not configured",
+        )
 
     txn = await db.payment_transactions.find_one(
-        {"order_id": req.order_id}, {"_id": 0}
+        {"order_id": req.order_id},
+        {"_id": 0},
     )
-    if not txn:
-        raise HTTPException(status_code=404, detail="Order not found")
-    if txn["rzp_order_id"] != req.razorpay_order_id:
-        raise HTTPException(status_code=400, detail="Order mismatch")
 
-    # If already paid, return cached (idempotent)
+    if not txn:
+        raise HTTPException(
+            status_code=404,
+            detail="Order not found",
+        )
+
+    if txn.get("rzp_order_id") != req.razorpay_order_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Order mismatch",
+        )
+
+    # Step 1: Verify the Checkout signature.
+    payload = (
+        f"{req.razorpay_order_id}|{req.razorpay_payment_id}"
+    )
+
+    if not _verify_signature(
+        payload,
+        req.razorpay_signature,
+        RAZORPAY_KEY_SECRET,
+    ):
+        logger.warning(
+            "Invalid Razorpay payment signature for order %s",
+            req.order_id,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid signature",
+        )
+
+    # Step 2: Fetch the payment directly from Razorpay.
+    try:
+        payment_details = await asyncio.to_thread(
+            rzp_client.payment.fetch,
+            req.razorpay_payment_id,
+        )
+    except Exception:
+        logger.exception(
+            "Unable to fetch Razorpay payment for order %s",
+            req.order_id,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to verify payment with Razorpay",
+        )
+
+    # Step 3: Verify payment identity and captured status.
+    if (
+        payment_details.get("id") != req.razorpay_payment_id
+        or payment_details.get("order_id") != req.razorpay_order_id
+        or payment_details.get("status") != "captured"
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Payment is not captured or does not match the order",
+        )
+
+    # Step 4: Verify the actual amount and currency.
+    try:
+        actual_amount = Decimal(str(payment_details["amount"]))
+        expected_amount = Decimal(str(txn["amount_minor"]))
+
+        if (
+            not actual_amount.is_finite()
+            or actual_amount != expected_amount
+            or payment_details.get("currency") != txn["currency"]
+        ):
+            raise ValueError("Payment amount or currency mismatch")
+
+    except (KeyError, ValueError, TypeError, ArithmeticError):
+        raise HTTPException(
+            status_code=400,
+            detail="Payment amount or currency mismatch",
+        )
+
+    # Step 5: Handle already-paid transactions safely.
     if txn.get("payment_status") == "paid":
+        stored_payment_id = txn.get("rzp_payment_id")
+
+        if stored_payment_id and stored_payment_id != req.razorpay_payment_id:
+            raise HTTPException(
+                status_code=409,
+                detail="Transaction is already linked to another payment",
+            )
+
+        await _finalize_paid_order(
+            txn,
+            stored_payment_id or req.razorpay_payment_id,
+        )
+
         return {
             "order_id": req.order_id,
             "payment_status": "paid",
@@ -895,43 +1353,91 @@ async def verify_payment(req: VerifyPaymentRequest):
             "currency": txn["currency"],
         }
 
-    payload = f"{req.razorpay_order_id}|{req.razorpay_payment_id}"
-    if not _verify_signature(payload, req.razorpay_signature, RAZORPAY_KEY_SECRET):
-        await db.payment_transactions.update_one(
-            {"order_id": req.order_id},
-            {"$set": {
-                "payment_status": "failed",
-                "status": "signature_invalid",
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }},
-        )
-        raise HTTPException(status_code=400, detail="Invalid signature")
-
-    # Signature valid → mark paid
+    # Step 6: Mark the transaction paid only after all checks pass.
     await db.payment_transactions.update_one(
-        {"order_id": req.order_id},
-        {"$set": {
-            "payment_status": "paid",
-            "status": "complete",
-            "rzp_payment_id": req.razorpay_payment_id,
-            "rzp_signature": req.razorpay_signature,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }},
+        {
+            "order_id": req.order_id,
+            "payment_status": {"$ne": "paid"},
+        },
+        {
+            "$set": {
+                "payment_status": "paid",
+                "status": "complete",
+                "rzp_payment_id": req.razorpay_payment_id,
+                "rzp_signature": req.razorpay_signature,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        },
     )
 
-    existing_order = await db.orders.find_one({"order_id": req.order_id}, {"_id": 0})
-    if not existing_order:
-        # Reload latest txn fields with rzp_payment_id we just set
-        latest_txn = await db.payment_transactions.find_one(
-            {"order_id": req.order_id}, {"_id": 0}
-        ) or txn
-        await _finalize_paid_order(latest_txn, req.razorpay_payment_id)
+    # Step 7: Reload and verify the stored transaction.
+    latest_txn = await db.payment_transactions.find_one(
+        {"order_id": req.order_id},
+        {"_id": 0},
+    )
+
+    if (
+        not latest_txn
+        or latest_txn.get("payment_status") != "paid"
+        or latest_txn.get("rzp_payment_id") != req.razorpay_payment_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Payment could not be confirmed",
+        )
+
+    await _finalize_paid_order(
+        latest_txn,
+        req.razorpay_payment_id,
+    )
 
     return {
         "order_id": req.order_id,
         "payment_status": "paid",
-        "amount_total": txn["amount_minor"],
-        "currency": txn["currency"],
+        "amount_total": latest_txn["amount_minor"],
+        "currency": latest_txn["currency"],
+    }
+
+
+    # Valid signature: mark the transaction as paid.
+    await db.payment_transactions.update_one(
+        {
+            "order_id": req.order_id,
+            "payment_status": {"$ne": "paid"},
+        },
+        {
+            "$set": {
+                "payment_status": "paid",
+                "status": "complete",
+                "rzp_payment_id": req.razorpay_payment_id,
+                "rzp_signature": req.razorpay_signature,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        },
+    )
+
+    # Reload the latest transaction before finalization.
+    latest_txn = await db.payment_transactions.find_one(
+        {"order_id": req.order_id},
+        {"_id": 0},
+    )
+
+    if not latest_txn or latest_txn.get("payment_status") != "paid":
+        raise HTTPException(
+            status_code=409,
+            detail="Payment could not be confirmed",
+        )
+
+    await _finalize_paid_order(
+        latest_txn,
+        latest_txn.get("rzp_payment_id"),
+    )
+
+    return {
+        "order_id": req.order_id,
+        "payment_status": "paid",
+        "amount_total": latest_txn["amount_minor"],
+        "currency": latest_txn["currency"],
     }
 
 
@@ -956,74 +1462,227 @@ async def razorpay_webhook(request: Request):
     body = await request.body()
     signature = request.headers.get("X-Razorpay-Signature", "")
 
-    if RAZORPAY_WEBHOOK_SECRET:
-        if not _verify_signature(body.decode("utf-8"), signature, RAZORPAY_WEBHOOK_SECRET):
-            raise HTTPException(status_code=400, detail="Invalid webhook signature")
+    # Webhook signature is mandatory.
+    if not RAZORPAY_WEBHOOK_SECRET:
+        logger.error("Razorpay webhook secret is not configured")
+        raise HTTPException(
+            status_code=500,
+            detail="Webhook configuration error",
+        )
 
+    if not _verify_signature(
+        body.decode("utf-8"),
+        signature,
+        RAZORPAY_WEBHOOK_SECRET,
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid webhook signature",
+        )
+
+    # Parse the verified payload.
     try:
         import json
         payload = json.loads(body.decode("utf-8"))
-    except Exception as e:
-        logger.error(f"Razorpay webhook parse error: {e}")
-        raise HTTPException(status_code=400, detail="Invalid payload")
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid payload",
+        )
 
     event = payload.get("event")
-    payment_entity = payload.get("payload", {}).get("payment", {}).get("entity", {})
-    plink_entity = payload.get("payload", {}).get("payment_link", {}).get("entity", {})
+
+    payment_entity = (
+        payload.get("payload", {})
+        .get("payment", {})
+        .get("entity", {})
+    )
+
+    plink_entity = (
+        payload.get("payload", {})
+        .get("payment_link", {})
+        .get("entity", {})
+    )
+
     rzp_order_id = payment_entity.get("order_id")
     rzp_payment_id = payment_entity.get("id")
     rzp_plink_id = plink_entity.get("id")
-    status = payment_entity.get("status")
 
+    # ---------------------------------------------------------
     # Payment Link events
-    if event in ("payment_link.paid",) and rzp_plink_id:
+    # ---------------------------------------------------------
+    if event == "payment_link.paid":
+        if not rzp_plink_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Missing payment-link ID",
+            )
+
         txn = await db.payment_transactions.find_one(
-            {"rzp_payment_link_id": rzp_plink_id}, {"_id": 0}
+            {"rzp_payment_link_id": rzp_plink_id},
+            {"_id": 0},
         )
-        if txn:
-            await db.payment_transactions.update_one(
-                {"rzp_payment_link_id": rzp_plink_id},
-                {"$set": {
-                    "payment_status": "paid",
-                    "status": "complete",
-                    "rzp_payment_id": rzp_payment_id or plink_entity.get("payments", [{}])[0].get("payment_id"),
-                    "webhook_event": event,
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                }},
+
+        if not txn:
+            logger.error(
+                "Payment-link transaction not found: %s",
+                rzp_plink_id,
             )
-            txn_after = await db.payment_transactions.find_one(
-                {"rzp_payment_link_id": rzp_plink_id}, {"_id": 0}
+            raise HTTPException(
+                status_code=404,
+                detail="Payment-link transaction not found",
             )
-            if txn_after:
-                await _finalize_paid_order(txn_after, txn_after.get("rzp_payment_id"))
+
+        # Verify the actual amount collected.
+        try:
+            amount_paid = Decimal(str(plink_entity["amount_paid"]))
+            expected_amount = Decimal(str(txn["amount_minor"]))
+
+            if (
+                not amount_paid.is_finite()
+                or amount_paid != expected_amount
+                or plink_entity.get("currency") != txn["currency"]
+            ):
+                raise ValueError("Payment amount or currency mismatch")
+
+        except (KeyError, ValueError, TypeError, ArithmeticError) as exc:
+            logger.error(
+                "Payment-link validation failed for %s: %s",
+                rzp_plink_id,
+                exc,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Payment amount or currency mismatch",
+            )
+
+        plink_payments = plink_entity.get("payments") or []
+
+        plink_payment_id = next(
+            (
+                payment.get("payment_id")
+                for payment in plink_payments
+                if isinstance(payment, dict)
+                and payment.get("payment_id")
+            ),
+            None,
+        )
+
+        payment_id = rzp_payment_id or plink_payment_id
+
+        await db.payment_transactions.update_one(
+            {"rzp_payment_link_id": rzp_plink_id},
+            {"$set": {
+                "payment_status": "paid",
+                "status": "complete",
+                "rzp_payment_id": payment_id,
+                "webhook_event": event,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+
+        txn_after = await db.payment_transactions.find_one(
+            {"rzp_payment_link_id": rzp_plink_id},
+            {"_id": 0},
+        )
+
+        if not txn_after:
+            raise HTTPException(
+                status_code=500,
+                detail="Unable to reload payment-link transaction",
+            )
+
+        await _finalize_paid_order(
+            txn_after,
+            txn_after.get("rzp_payment_id"),
+        )
+
         return {"received": True}
 
+    # ---------------------------------------------------------
+    # Regular Razorpay order events
+    # ---------------------------------------------------------
     if rzp_order_id:
+        txn = await db.payment_transactions.find_one(
+            {"rzp_order_id": rzp_order_id},
+            {"_id": 0},
+        )
+
+        if not txn:
+            logger.warning(
+                "Transaction not found for Razorpay order %s",
+                rzp_order_id,
+            )
+            return {"received": True}
+
         update_fields = {
             "webhook_event": event,
-            "rzp_payment_id": rzp_payment_id,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
-        if status == "captured" or event == "payment.captured":
+
+        if rzp_payment_id:
+            update_fields["rzp_payment_id"] = rzp_payment_id
+
+        if event == "payment.captured" or payment_entity.get("status") == "captured":
+
+            # Verify amount and currency before marking the transaction paid.
+            try:
+                actual_amount = Decimal(str(payment_entity["amount"]))
+                expected_amount = Decimal(str(txn["amount_minor"]))
+
+                if (
+                    not actual_amount.is_finite()
+                    or actual_amount != expected_amount
+                    or payment_entity.get("currency") != txn["currency"]
+                ):
+                    raise ValueError("Payment amount or currency mismatch")
+
+            except (KeyError, ValueError, TypeError, ArithmeticError) as exc:
+                logger.error(
+                    "Payment validation failed for order %s: %s",
+                    rzp_order_id,
+                    exc,
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail="Payment amount or currency mismatch",
+                )
+
             update_fields["payment_status"] = "paid"
             update_fields["status"] = "complete"
-        elif event in ("payment.failed",):
+
+        elif event == "payment.failed":
             update_fields["payment_status"] = "failed"
             update_fields["status"] = "failed"
+
+        else:
+            return {"received": True}
+
+        update_filter = {"rzp_order_id": rzp_order_id}
+
+        # A delayed failure event must never downgrade a paid transaction.
+        if event == "payment.failed":
+            update_filter["payment_status"] = {"$ne": "paid"}
+
         await db.payment_transactions.update_one(
-            {"rzp_order_id": rzp_order_id},
+            update_filter,
             {"$set": update_fields},
         )
-        # Finalize + send emails if this webhook is the first paid signal
+
+        # Reload and finalize only confirmed paid transactions.
         if update_fields.get("payment_status") == "paid":
             txn_after = await db.payment_transactions.find_one(
-                {"rzp_order_id": rzp_order_id}, {"_id": 0}
+                {"rzp_order_id": rzp_order_id},
+                {"_id": 0},
             )
-            if txn_after:
-                await _finalize_paid_order(txn_after, rzp_payment_id)
+
+            if txn_after and txn_after.get("payment_status") == "paid":
+                await _finalize_paid_order(
+                    txn_after,
+                    txn_after.get("rzp_payment_id"),
+                )
 
     return {"received": True}
-
 
 @api_router.post("/orders/lookup")
 async def lookup_order(req: OrderLookupRequest):
@@ -1197,7 +1856,9 @@ async def startup_event():
     if shopify_client.shopify_client:
         validation = await shopify_client.shopify_client.validate_token()
         if not validation.get("valid"):
-            logger.warning(f"Shopify token invalid: {validation.get('error')}")
+            logger.warning(
+                f"Shopify authentication failed: {validation.get('error')}"
+            )
             shopify_client.shopify_client.disable()
 
 
